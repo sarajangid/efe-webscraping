@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Simple Button Page</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <button onclick="runScraper()">Click Me</button>
+
+    <script>
+        function runScraper() {
+            fetch("http://127.0.0.1:5000/run-scraper")
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById("output").innerText = data.result;
+            })
+            .catch(error => console.error(error));  
+            console.log("running");
+        }
+    </script>
+</body>
+</html>
