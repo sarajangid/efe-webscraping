@@ -19,9 +19,24 @@ from selenium.webdriver.support.ui import WebDriverWait
 BASE_URL = "https://sam.gov"
 SEARCH_URL = "https://sam.gov/search/"
 API_BASE = "https://api.sam.gov/assistance-listings/v1"
-OUTPUT_FIELDS = ["name", "geographic_area", "youth_generation", "pdfs", "brief_summary", "deadline", "link"]
+OUTPUT_FIELDS = ["name", "geographic_area", "youth_generation", "pdfs", "brief_summary", "deadline", "keywords", "link"]
 # Header row labels for the Google Sheet (same order as OUTPUT_FIELDS)
-SHEET_HEADERS = ["Name", "Geographic Area", "Youth Generation", "PDF", "Summary", "Deadline", "Link"]
+SHEET_HEADERS = ["Name", "Geographic Area", "Youth Generation", "PDF", "Summary", "Deadline", "Keywords", "Link"]
+# Keywords to look for in the long description on each listing's detail page
+KEYWORDS_TO_CHECK = ["nonprofit", "education", "employment"]
+
+
+def _norm_link(s):
+    """Normalize link for deduplication (strip, strip trailing slash)."""
+    return (s or "").strip().rstrip("/")
+
+
+def _is_likely_url(s):
+    """True if s looks like a listing URL (so we don't treat empty or wrong column as existing link)."""
+    if not s or not _norm_link(s):
+        return False
+    t = (s or "").lower()
+    return "http" in t or "sam.gov" in t
 
 DEFAULT_PARAMS = {
     "index": "cfda",
@@ -100,7 +115,7 @@ def fetch_page_selenium(page=1, page_size=25, headless=True):
             WebDriverWait(driver, 20).until(
                 lambda d: "Assistance Listing" in d.page_source or "assistanceListings" in d.page_source or "searchResults" in d.page_source
             )
-            time.sleep(3)
+            time.sleep(1)
             return driver.page_source
         except Exception as e:
             if driver:
@@ -218,6 +233,7 @@ def parse_json_listings(items):
             "pdfs": "",
             "brief_summary": str(brief_summary).strip()[:500],
             "deadline": str(deadline).strip(),
+            "keywords": "",
             "link": link,
         })
     return rows if rows else None
@@ -306,6 +322,7 @@ def extract_from_html(soup):
             "pdfs": "",
             "brief_summary": brief_summary[:500],
             "deadline": deadline[:100],
+            "keywords": "",
             "link": link,
         })
     return rows if rows else None
@@ -350,13 +367,22 @@ def _extract_youth_from_text(text):
     return ""
 
 
+def _extract_keywords_from_text(text):
+    """Check long description text for keywords 'nonprofit', 'education', 'employment'. Returns comma-separated list of matches."""
+    if not text:
+        return ""
+    text_lower = text.lower()
+    found = [kw for kw in KEYWORDS_TO_CHECK if kw in text_lower]
+    return ", ".join(found) if found else ""
+
+
 def scrape_listing_detail(detail_url, driver=None, base_url=BASE_URL):
     """
     Fetch one listing detail page and extract geographic_area, youth_generation, pdfs, brief_summary.
     Returns dict with those keys (and deadline if found on page). Uses existing driver if provided.
     """
     import time
-    result = {"geographic_area": "", "youth_generation": "", "pdfs": "", "brief_summary": "", "deadline": ""}
+    result = {"geographic_area": "", "youth_generation": "", "pdfs": "", "brief_summary": "", "deadline": "", "keywords": ""}
     if not detail_url:
         return result
     own_driver = False
@@ -370,7 +396,7 @@ def scrape_listing_detail(detail_url, driver=None, base_url=BASE_URL):
         own_driver = True
     try:
         driver.get(detail_url)
-        time.sleep(3)
+        time.sleep(1)
         html = driver.page_source
     finally:
         if own_driver and driver:
@@ -382,6 +408,7 @@ def scrape_listing_detail(detail_url, driver=None, base_url=BASE_URL):
     full_text = soup.get_text(separator=" ", strip=True)
     result["geographic_area"] = _extract_geographic_from_text(full_text)[:300]
     result["youth_generation"] = _extract_youth_from_text(full_text)
+    result["keywords"] = _extract_keywords_from_text(full_text)
     # PDF links
     pdf_links = []
     for a in soup.find_all("a", href=True):
@@ -433,8 +460,10 @@ def _ensure_row_fields(row):
     return row
 
 
-def scrape_sam_grants(pages=1, page_size=25, verify_ssl=True, use_selenium=False, api_key=None, scrape_details=True, max_details=None):
-    """Scrape SAM.gov grants search results; optionally scrape each listing detail page for geographic_area, youth, pdfs, brief_summary."""
+def scrape_sam_grants(pages=1, page_size=25, verify_ssl=True, use_selenium=False, api_key=None, scrape_details=True, max_details=None, existing_links=None):
+    """Scrape SAM.gov grants search results; optionally scrape each listing detail page.
+    If existing_links is provided (set of normalized URLs), detail pages are only scraped for listings not in that set (faster when sheet already has data).
+    """
     if api_key:
         rows = fetch_via_api(api_key, pages=pages, page_size=page_size)
     else:
@@ -444,7 +473,8 @@ def scrape_sam_grants(pages=1, page_size=25, verify_ssl=True, use_selenium=False
                 html = fetch_page_selenium(page=page, page_size=page_size)
                 rows = scrape_page(html)
                 if not rows:
-                    break
+                    # Don't break on first empty page; keep trying (e.g. page 4 might be flaky)
+                    continue
                 all_rows.extend(rows)
             rows = all_rows
         else:
@@ -453,7 +483,7 @@ def scrape_sam_grants(pages=1, page_size=25, verify_ssl=True, use_selenium=False
                 html = fetch_page(session, page=page, page_size=page_size, verify_ssl=verify_ssl)
                 page_rows = scrape_page(html)
                 if not page_rows:
-                    break
+                    continue
                 all_rows.extend(page_rows)
             rows = all_rows
     for r in rows:
@@ -461,6 +491,7 @@ def scrape_sam_grants(pages=1, page_size=25, verify_ssl=True, use_selenium=False
     if not scrape_details or not rows:
         return rows
     import time
+    existing_links = existing_links if existing_links is not None else set()
     n = len(rows) if max_details is None else min(max_details, len(rows))
     opts = Options()
     opts.add_argument("--headless=new")
@@ -475,18 +506,22 @@ def scrape_sam_grants(pages=1, page_size=25, verify_ssl=True, use_selenium=False
             link = row.get("link")
             if not link:
                 continue
+            # Skip detail scrape for listings already in the sheet (big speedup on re-runs)
+            if _norm_link(link) in existing_links:
+                continue
             try:
                 detail = scrape_listing_detail(link, driver=driver)
                 row["geographic_area"] = detail.get("geographic_area") or row.get("geographic_area", "")
                 row["youth_generation"] = detail.get("youth_generation") or row.get("youth_generation", "")
                 row["pdfs"] = detail.get("pdfs") or row.get("pdfs", "")
+                row["keywords"] = detail.get("keywords") or row.get("keywords", "")
                 if detail.get("brief_summary"):
                     row["brief_summary"] = detail["brief_summary"][:800]
                 if detail.get("deadline"):
                     row["deadline"] = detail["deadline"]
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(0.5)
     finally:
         try:
             driver.quit()
@@ -507,9 +542,46 @@ def _spreadsheet_id_from_url(url_or_id):
     return s if re.match(r"^[a-zA-Z0-9_-]+$", s) else None
 
 
+def get_existing_links(spreadsheet_id, credentials_path=None):
+    """Fetch the set of normalized links already in the sheet (for skipping detail scrapes). Returns empty set on error."""
+    if not spreadsheet_id or not credentials_path:
+        return set()
+    try:
+        sid = _spreadsheet_id_from_url(spreadsheet_id)
+        if not sid:
+            return set()
+        gc = gspread.service_account(filename=credentials_path)
+        sh = gc.open_by_key(sid)
+        wks = sh.get_worksheet(0)
+        existing = wks.get_all_values()
+        if not existing or len(existing) <= 1:
+            return set()
+        header = existing[0]
+        link_col = OUTPUT_FIELDS.index("link")
+        for i, h in enumerate(header):
+            if (h or "").strip().lower() == "link":
+                link_col = i
+                break
+        # Only count cells that look like URLs; if row has more columns than header, link is last col
+        out = set()
+        for row in existing[1:]:
+            if not row:
+                continue
+            col = max(link_col, min(len(row) - 1, len(OUTPUT_FIELDS) - 1))
+            if col < 0:
+                continue
+            val = str(row[col] or "")
+            if _is_likely_url(val):
+                out.add(_norm_link(val))
+        return out
+    except Exception:
+        return set()
+
+
 def append_to_google_sheet(rows, spreadsheet_id, credentials_path=None, sheet_index=0):
     """
-    Append only new scraped rows to a Google Sheet (deduplicated by link).
+    Check if each scraped entry already exists in the sheet (by Link); append only new
+    entries to the closest empty row (first row after the last used row).
     Uses the first worksheet by default. If the sheet is empty, writes headers then data.
     Requires gspread and google-auth. Auth via service account JSON.
     Returns the number of rows appended (0 if all were already in the sheet).
@@ -527,8 +599,6 @@ def append_to_google_sheet(rows, spreadsheet_id, credentials_path=None, sheet_in
     wks = sh.get_worksheet(sheet_index)
     existing = wks.get_all_values()
     # Deduplicate by "link" (unique per listing)
-    def norm_link(s):
-        return (s or "").strip().rstrip("/")
     link_col_idx = OUTPUT_FIELDS.index("link")
     if existing and len(existing) > 1:
         header = existing[0]
@@ -538,16 +608,35 @@ def append_to_google_sheet(rows, spreadsheet_id, credentials_path=None, sheet_in
             if (h or "").strip().lower() == "link":
                 link_col = i
                 break
-        existing_links = {norm_link(str(row[link_col])) for row in existing[1:] if len(row) > link_col}
+        # Only count cells that look like URLs (ignore empty or wrong column).
+        # If a row has more columns than header (e.g. 8 cols data, 7 cols header), link is last column.
+        existing_links = set()
+        for row in existing[1:]:
+            if not row:
+                continue
+            col = max(link_col, min(len(row) - 1, len(OUTPUT_FIELDS) - 1))
+            if col < 0:
+                continue
+            val = str(row[col] or "")
+            if _is_likely_url(val):
+                existing_links.add(_norm_link(val))
     else:
         existing_links = set()
-    new_rows = [r for r in rows if norm_link(r.get("link")) and norm_link(r.get("link")) not in existing_links]
+    new_rows = [r for r in rows if _norm_link(r.get("link")) and _norm_link(r.get("link")) not in existing_links]
     if not new_rows:
         return 0
     data_rows = [[(r.get(k) or "") for k in OUTPUT_FIELDS] for r in new_rows]
+    # Always write at the first non-empty row (next row after last used)
+    num_cols = len(SHEET_HEADERS)  # 8: A–H
+    col_end = chr(ord("A") + num_cols - 1)  # "H"
     if not existing:
-        wks.append_row(SHEET_HEADERS, value_input_option="USER_ENTERED")
-    wks.append_rows(data_rows, value_input_option="USER_ENTERED")
+        wks.update("A1:{}1".format(col_end), [SHEET_HEADERS], value_input_option="USER_ENTERED")
+        next_row = 2
+    else:
+        next_row = len(existing) + 1
+    end_row = next_row + len(data_rows) - 1
+    range_str = "A{}:{}{}".format(next_row, col_end, end_row)
+    wks.update(range_str, data_rows, value_input_option="USER_ENTERED")
     return len(new_rows)
 
 
@@ -562,7 +651,7 @@ if __name__ == "__main__":
     except ImportError:
         pass
     parser = argparse.ArgumentParser(description="Scrape SAM.gov grants (CFDA) search results and append to Google Sheet.")
-    parser.add_argument("-p", "--pages", type=int, default=1, help="Number of result pages to scrape")
+    parser.add_argument("-p", "--pages", type=int, default=10, help="Number of result pages to scrape (default: 10)")
     parser.add_argument("--page-size", type=int, default=25, help="Results per page")
     parser.add_argument("--no-verify-ssl", action="store_true", help="Disable SSL verification (use if you see certificate errors)")
     parser.add_argument("--selenium", action="store_true", help="Use Selenium + Chrome to load JS-rendered page (default when no API key)")
@@ -585,6 +674,12 @@ if __name__ == "__main__":
     use_selenium = args.selenium or (not args.no_selenium and not args.api_key)
     if use_selenium:
         print("Using Selenium + Chrome to load the page...")
+    # Fetch existing sheet links so we only scrape detail pages for new listings (much faster)
+    existing_links = None
+    if args.google_sheet and args.credentials:
+        existing_links = get_existing_links(args.google_sheet, args.credentials)
+        if existing_links:
+            print("Loaded {} existing link(s) from sheet; will skip detail scrape for those.".format(len(existing_links)))
     print("Fetching SAM.gov search results...")
     rows = scrape_sam_grants(
         pages=args.pages,
@@ -594,6 +689,7 @@ if __name__ == "__main__":
         api_key=args.api_key,
         scrape_details=not args.no_scrape_details,
         max_details=args.max_details,
+        existing_links=existing_links,
     )
     print(f"Scraped {len(rows)} listings.")
     if rows:
