@@ -2,6 +2,10 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+from gspread_dataframe import get_as_dataframe
+import json
 
 BASE_SEARCH_URL = "https://simpler.grants.gov/search"
 BASE_DOMAIN = "https://simpler.grants.gov"
@@ -21,16 +25,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-# -----------------------------
-# STEP 1: Collect detail links using Selenium
-# -----------------------------
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
 driver.get(BASE_SEARCH_URL + "?andOr=OR&query=education+science+technology+engineering+math+career")
 
 wait = WebDriverWait(driver, 10)
 
 while True:
-    # Wait until results load
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
@@ -49,7 +49,6 @@ while True:
 
     print(f"Collected {len(links)} links so far")
 
-    # Try clicking Next
     try:
         next_button = wait.until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, "button[data-testid='pagination-next']"))
@@ -64,35 +63,22 @@ while True:
 
 driver.quit()
 
-
-# -----------------------------
-# STEP 2: Visit each grant page
-# -----------------------------
 for detail_link in links:
 
     try:
         response = requests.get(detail_link)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # -----------------------------
-        # Grant Name
-        # -----------------------------
         title_tag = soup.select_one(
             "h2.margin-bottom-0.tablet-lg\\:font-sans-xl.desktop-lg\\:font-sans-2xl.margin-top-0"
         )
         grant_name = title_tag.get_text(strip=True) if title_tag else None
 
-        # -----------------------------
-        # Agency
-        # -----------------------------
         agency = None
         p_tag = soup.select_one("p.usa-intro")
         if p_tag:
             agency = p_tag.get_text(strip=True).replace("Agency:", "").strip()
 
-        # -----------------------------
-        # Deadline
-        # -----------------------------
         deadline = None
         for tag in soup.find_all("div", class_="usa-tag"):
             if "Closing:" in tag.get_text():
@@ -100,9 +86,6 @@ for detail_link in links:
                 deadline = span.get_text(strip=True) if span else None
                 break
 
-        # -----------------------------
-        # Awards
-        # -----------------------------
         award_min = 0
         award_max = 0
 
@@ -130,9 +113,6 @@ for detail_link in links:
             elif "Maximum" in label_text:
                 award_max = numeric_value
 
-        # -----------------------------
-        # Description (adaptive logic)
-        # -----------------------------
         description = None
 
         header = soup.find("h2", string=lambda x: x and "Description" in x)
@@ -150,14 +130,8 @@ for detail_link in links:
                     # Case 2: no <p> tags → get full div text
                     description = div.get_text(strip=True)
 
-        # -----------------------------
-        # Documents
-        # -----------------------------
         documents = [a["href"] for a in soup.select('tbody a.usa-link')]
 
-        # -----------------------------
-        # Application Link (Grants.gov)
-        # -----------------------------
         application_link = None
 
         span = soup.find("span", string="View on Grants.gov")
@@ -166,9 +140,6 @@ for detail_link in links:
             if parent_a:
                 application_link = parent_a.get("href")
 
-        # -----------------------------
-        # Append Row
-        # -----------------------------
         rows.append({
             "Grant Name": grant_name,
             "Agency": agency,
@@ -188,19 +159,56 @@ for detail_link in links:
         print(f"Error scraping {detail_link}: {e}")
         continue
 
-
-# -----------------------------
-# STEP 3: Create DataFrame
-# -----------------------------
 df = pd.DataFrame(rows)
 
-print(df.head())
-print(f"Total grants scraped: {len(df)}")
-
-# Optional: convert Documents list to JSON string for CSV
-import json
+# convert documents list to json string
 df["Documents"] = df["Documents"].apply(json.dumps)
 
-df.to_csv("grants.csv", index=False)
+# -----------------------------
+# GOOGLE SHEETS CONNECTION
+# -----------------------------
 
-print("Saved to grants.csv")
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+creds = Credentials.from_service_account_file(
+    "service_account.json",
+    scopes=SCOPES
+)
+
+client = gspread.authorize(creds)
+
+sheet = client.open("EFE Web Scraper")      # change to your sheet name
+worksheet = sheet.worksheet("SimplerGrants")       # change tab name if needed
+
+# -----------------------------
+# LOAD EXISTING DATA
+# -----------------------------
+
+existing_df = get_as_dataframe(worksheet).dropna(how="all")
+
+if len(existing_df) == 0:
+    # first run → write headers + data
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+    print("First run — wrote full dataset")
+
+else:
+    # -----------------------------
+    # ONLY ADD NEW GRANTS
+    # -----------------------------
+
+    existing_links = set(existing_df["Application Link"])
+
+    new_rows = df[~df["Application Link"].isin(existing_links)]
+
+    if not new_rows.empty:
+        worksheet.append_rows(
+            new_rows.values.tolist(),
+            value_input_option="RAW"
+        )
+
+        print(f"Added {len(new_rows)} new grants")
+    else:
+        print("No new grants found")
