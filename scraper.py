@@ -161,12 +161,8 @@ for detail_link in links:
 
 df = pd.DataFrame(rows)
 
-# convert documents list to json string
 df["Documents"] = df["Documents"].apply(json.dumps)
 
-# -----------------------------
-# GOOGLE SHEETS CONNECTION
-# -----------------------------
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -180,24 +176,16 @@ creds = Credentials.from_service_account_file(
 
 client = gspread.authorize(creds)
 
-sheet = client.open("EFE Web Scraper")      # change to your sheet name
-worksheet = sheet.worksheet("SimplerGrants")       # change tab name if needed
-
-# -----------------------------
-# LOAD EXISTING DATA
-# -----------------------------
+sheet = client.open("EFE Web Scraper")
+worksheet = sheet.worksheet("SimplerGrants")
 
 existing_df = get_as_dataframe(worksheet).dropna(how="all")
 
 if len(existing_df) == 0:
-    # first run → write headers + data
     worksheet.update([df.columns.values.tolist()] + df.values.tolist())
     print("First run — wrote full dataset")
 
 else:
-    # -----------------------------
-    # ONLY ADD NEW GRANTS
-    # -----------------------------
 
     existing_links = set(existing_df["Application Link"])
 
