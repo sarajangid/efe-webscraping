@@ -28,6 +28,7 @@ def extract_client_name(td):
 
 def extract_listing_rows(html):
     soup = BeautifulSoup(html, "html.parser")
+    # print(soup)
     rows = soup.select("tr.whiteBackground, tr.graybackground, tr.grayBackground")
     results = []
 
@@ -56,6 +57,36 @@ def extract_listing_rows(html):
 
         # 5) geography
         geographic_area = clean_text(tds[4].get_text(" ", strip=True)) if len(tds) > 4 else ""
+
+        # Access inner link
+        try:
+            res = requests.get(detail_page_url, headers=HEADERS)
+            res.raise_for_status()
+
+            info_soup = BeautifulSoup(res.text, "html.parser")
+
+            page_title = info_soup.title.get_text(strip=True) if info_soup.title else "No Title"
+            # print(f"Landed on page: {page_title}")
+
+            info_table = info_soup.select("div.gray-bg")
+            # if not info_table:
+            #     print(f"--> Warning: 'div.gray-bg' not found on {detail_page_url}")
+            # else:
+            #     print(f"--> Success! Found target div.")
+            #     print(info_table)
+            
+            # lis = info_table[0].find_all("li")
+            # if not lis:
+            #     continue
+            # print(lis)
+        except Exception as e:
+            print(f"Error crawling {detail_page_url}: {e}")
+        
+        # 6) pdfs
+        # follow up once we get access
+
+        # 7) og link
+        # follow up once we get access
 
         results.append({
             "title": title,
