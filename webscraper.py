@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EFE MENA Education Grants Scraper
-Scrapes Impact Funding Substack for education grants targeting MENA countries.
+Scrapes Impact Funding Substack for education/workforce grants targeting MENA countries.
 """
 
 import time
@@ -18,10 +18,15 @@ from summarizer import generate_summary
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-ARCHIVE_URL = (
-    "https://impactfunding.substack.com/s/education-human-rights-and-inclusion"
-    "/archive?sort=new"
-)
+ARCHIVE_URLS = [
+    "https://impactfunding.substack.com/s/education-human-rights-and-inclusion/archive?sort=new",
+    "https://impactfunding.substack.com/s/health-and-wash/archive?sort=new",
+    "https://impactfunding.substack.com/s/agriculture-climate-environment-energy/archive?sort=new",
+    "https://impactfunding.substack.com/s/gender/archive?sort=new",
+    "https://impactfunding.substack.com/s/humanitarian-aid-emergency-programming/archive?sort=new",
+    "https://impactfunding.substack.com/s/cross-cutting-intersectional-impact/archive?sort=new",
+    "https://impactfunding.substack.com/s/innovation-research-and-smart-cities/archive?sort=new",
+]
 
 OUTPUT_FILE = "efe_mena_education_grants.xlsx"
 
@@ -33,7 +38,60 @@ MENA_KEYWORDS = [
     "arab world", "arab region",
 ]
 
+TOPIC_KEYWORDS = [
+    "youth employment", "workforce development", "employability", "job placement",
+    "job creation", "livelihoods", "economic empowerment", "economic inclusion",
+    "apprenticeship", "internship", "mentorship", "job readiness", "job search",
+    "labor market activation", "economic participation", "labor market entry",
+    "neet", "work readiness", "job seekers", "early-career",
+    "access to opportunities", "reducing inequalities", "skills development",
+    "vocational training", "technical training", "soft skills", "digital skills",
+    "vocational skills", "technical skills", "green jobs", "green skills",
+    "tvet", "upskilling", "reskilling", "employability skills",
+    "curriculum development", "vocational training center", "career center",
+    "ai skills", "climate change", "financial literacy", "circular economy",
+    "higher education", "university", "educational institutions", "life skills",
+    "transversal skills", "entrepreneurial skills", "blended training",
+    "entrepreneurship", "sme development", "private sector development",
+    "self employment", "virtual jobs", "income generation", "startup incubation",
+    "employer engagement", "business acceleration", "micro entrepreneurship",
+    "new business creation", "sme", "incubation", "green entrepreneurship",
+    "women entrepreneurship", "startup", "startup support", "financial inclusion",
+    "home-based businesses", "msme", "microbusiness", "freelance",
+    "gig work", "gig economy", "capacity building", "systems strengthening",
+    "framework", "action plan", "competitiveness", "skills gaps",
+    "business association", "chamber of commerce", "industry federation",
+]
+
 # ── Step 1: Collect post URLs ─────────────────────────────────────────────────
+
+def get_post_urls_from_archive(driver, archive_url):
+    """Scrape all post URLs from a single archive page by scrolling to the bottom."""
+    driver.get(archive_url)
+    WebDriverWait(driver, 15).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/p/']"))
+    )
+
+    last_height = 0
+    for _ in range(20):
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2)
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        if new_height == last_height:
+            break
+        last_height = new_height
+
+    urls = []
+    seen = set()
+    for a in driver.find_elements(By.CSS_SELECTOR, "a[href*='/p/']"):
+        href = a.get_attribute("href")
+        if href:
+            clean = href.split("?")[0].split("#")[0]
+            if clean not in seen:
+                seen.add(clean)
+                urls.append(clean)
+    return urls
+
 
 def get_post_urls():
     options = Options()
@@ -44,28 +102,17 @@ def get_post_urls():
     post_urls = []
 
     try:
-        driver.get(ARCHIVE_URL)
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/p/']"))
-        )
-
-        last_height = 0
-        for _ in range(20):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
-
-        seen = set()
-        for a in driver.find_elements(By.CSS_SELECTOR, "a[href*='/p/']"):
-            href = a.get_attribute("href")
-            if href:
-                clean = href.split("?")[0].split("#")[0]
-                if clean not in seen:
-                    seen.add(clean)
-                    post_urls.append(clean)
+        seen_global = set()
+        for archive_url in ARCHIVE_URLS:
+            print(f"    Scanning: {archive_url}")
+            urls = get_post_urls_from_archive(driver, archive_url)
+            new_count = 0
+            for url in urls:
+                if url not in seen_global:
+                    seen_global.add(url)
+                    post_urls.append(url)
+                    new_count += 1
+            print(f"      -> {new_count} new post(s)")
     finally:
         driver.quit()
 
@@ -264,15 +311,18 @@ def parse_grant_group(bq, siblings):
 
 
 def is_relevant(grant):
-    """True if the grant covers any of the target MENA countries/regions."""
+    """True if the grant covers a MENA country/region AND matches a topic keyword."""
     haystack = " ".join([
         grant.get("geographic_area", ""),
         grant.get("title", ""),
-        grant.get("summary", ""),
+        grant.get("description", ""),
         grant.get("eligibility", ""),
+        grant.get("focus_sector", ""),
     ]).lower()
 
-    return any(kw in haystack for kw in MENA_KEYWORDS)
+    has_mena = any(kw in haystack for kw in MENA_KEYWORDS)
+    has_topic = any(kw in haystack for kw in TOPIC_KEYWORDS)
+    return has_mena and has_topic
 
 
 def parse_grants_from_post(markup, post_url):
@@ -369,14 +419,14 @@ def save_to_excel(grants, path=OUTPUT_FILE):
 
 def main():
     print("=" * 60)
-    print("  EFE MENA Education Grants Scraper")
+    print("  EFE MENA Grants Scraper")
     print("=" * 60)
 
-    print("\n[1/3] Collecting post URLs from archive...")
+    print(f"\n[1/4] Collecting post URLs from {len(ARCHIVE_URLS)} archive(s)...")
     post_urls = get_post_urls()
     print(f"  Found {len(post_urls)} posts")
 
-    print("\n[2/3] Fetching posts and parsing grants...\n")
+    print("\n[2/4] Fetching posts and parsing grants...\n")
     all_grants = []
 
     for i, url in enumerate(post_urls, 1):
@@ -397,8 +447,6 @@ def main():
     for i, grant in enumerate(all_grants):
         grant["summary"] = generate_summary(grant)
         print(f"    [{i+1}/{len(all_grants)}] summarized")
-        if i < len(all_grants) - 1:
-            time.sleep(13)  # stay under 5 req/min free tier limit
 
     print(f"\n[4/4] Exporting {len(all_grants)} total grant(s) to Excel...")
     save_to_excel(all_grants)
