@@ -1,0 +1,18 @@
+# Environment / secrets
+.env
+
+# Excel output (generated file, not source code)
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Excel lock files
+~$*

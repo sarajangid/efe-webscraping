@@ -14,6 +14,7 @@ import requests
 from bs4 import BeautifulSoup
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
+from summarizer import generate_summary
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -256,7 +257,8 @@ def parse_grant_group(bq, siblings):
     return {
         "title": title,
         "donor_name": donor_name,
-        "summary": description,
+        "description": description,
+        "summary": "",
         **fields,
     }
 
@@ -322,13 +324,14 @@ COLUMNS = [
     ("Eligibility Requirements", 45),
     ("Grant Link",               45),
     ("Deadline",                 18),
-    ("Summary",                  65),
+    ("Description",              65),
+    ("AI Summary",               65),
 ]
 
 GRANT_KEYS = [
     "post_link", "donor_name", "funding_amount",
     "geographic_area", "focus_sector", "eligibility",
-    "grant_link", "deadline", "summary",
+    "grant_link", "deadline", "description", "summary",
 ]
 
 HEADER_COLOR = "1F4E79"
@@ -390,7 +393,14 @@ def main():
         all_grants.extend(grants)
         time.sleep(1)
 
-    print(f"\n[3/3] Exporting {len(all_grants)} total grant(s) to Excel...")
+    print(f"\n[3/4] Generating AI summaries for {len(all_grants)} grant(s)...")
+    for i, grant in enumerate(all_grants):
+        grant["summary"] = generate_summary(grant)
+        print(f"    [{i+1}/{len(all_grants)}] summarized")
+        if i < len(all_grants) - 1:
+            time.sleep(13)  # stay under 5 req/min free tier limit
+
+    print(f"\n[4/4] Exporting {len(all_grants)} total grant(s) to Excel...")
     save_to_excel(all_grants)
     print("\nDone!")
 
