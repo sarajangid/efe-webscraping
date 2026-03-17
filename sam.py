@@ -10,8 +10,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
-MAX_PAGES = 1
-MAX_WORKERS = 3  # number of reusable drivers in the pool
+MAX_PAGES = 10
+MAX_WORKERS = 5  # number of reusable drivers in the pool
 
 MENA_COUNTRIES = [
     "Morocco", "Algeria", "Tunisia", "Egypt", "Jordan",
