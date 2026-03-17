@@ -1,11 +1,27 @@
-import requests
-from bs4 import BeautifulSoup
-import time
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-from gspread_dataframe import get_as_dataframe
+import os
+import re
 import json
+import time
+import shutil
+import requests
+import pandas as pd
+from urllib.parse import urlencode
+from bs4 import BeautifulSoup
+from openpyxl import load_workbook
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+
+from scraper_config import CLIENT_ID, CLIENT_SECRET, TENANT_ID, USER_ID
+
+
+############################
+# CONFIG
+############################
 
 BASE_SEARCH_URL = "https://simpler.grants.gov/search"
 BASE_DOMAIN = "https://simpler.grants.gov"
@@ -15,29 +31,117 @@ params = {
     "query": "education science technology engineering math career",
 }
 
-rows = []
-links = []
+BASE_DOWNLOAD_DIR = "SimplerGrants"
+EXCEL_FILE = "SimplerGrants.xlsx"
+SHEET_NAME = "SimplerGrants"
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+def get_access_token():
+
+    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
+
+    data = {
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "scope": "https://graph.microsoft.com/.default",
+        "grant_type": "client_credentials"
+    }
+
+    response = requests.post(url, data=data)
+
+    data = response.json()
+
+    if "access_token" not in data:
+        raise Exception(f"Token error: {data}")
+
+    return data["access_token"]
+
+ONEDRIVE_FOLDER = "SimplerGrants"
+TOKEN = get_access_token()
+
+os.makedirs(BASE_DOWNLOAD_DIR, exist_ok=True)
+
+############################
+# HELPERS
+############################
+
+def safe_name(name):
+    clean = re.sub(r'[<>:"/\\|?*]', "", name)
+    return clean[:120]
+
+
+def download_documents(grant_name, documents):
+
+    folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
+    os.makedirs(folder, exist_ok=True)
+
+    for url in documents:
+
+        if not url.startswith("http"):
+            url = BASE_DOMAIN + url
+
+        filename = url.split("/")[-1]
+        filepath = os.path.join(folder, filename)
+
+        if os.path.exists(filepath):
+            continue
+
+        try:
+            r = requests.get(url, stream=True)
+
+            with open(filepath, "wb") as f:
+                for chunk in r.iter_content(8192):
+                    f.write(chunk)
+
+            print("Downloaded:", filename)
+
+        except Exception as e:
+            print("Download error:", e)
+
+
+def upload_to_onedrive(local_path, remote_path):
+
+    url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/drive/root:/{remote_path}:/content"
+
+    headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Content-Type": "application/octet-stream"
+    }
+
+    with open(local_path, "rb") as f:
+        r = requests.put(url, headers=headers, data=f)
+
+        if r.status_code not in [200, 201]:
+            print("Upload failed:", r.text)
+        else:
+            print("Uploaded:", remote_path)
+
+    print("Uploaded:", remote_path)
+
+
+############################
+# COLLECT SEARCH LINKS
+############################
+
+search_url = BASE_SEARCH_URL + "?" + urlencode(params)
 
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
-driver.get(BASE_SEARCH_URL + "?andOr=OR&query=education+science+technology+engineering+math+career")
+driver.get(search_url)
 
 wait = WebDriverWait(driver, 10)
 
+links = []
+
 while True:
+
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
     results = soup.select("tr.border-base")
 
     for result in results:
+
         a_tag = result.select_one("a")
+
         if not a_tag:
             continue
 
@@ -47,39 +151,159 @@ while True:
         if full_link not in links:
             links.append(full_link)
 
-    print(f"Collected {len(links)} links so far")
+    print(f"Collected {len(links)} links")
 
     try:
+
         next_button = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "button[data-testid='pagination-next']"))
+            EC.element_to_be_clickable(
+                (By.CSS_SELECTOR, "button[data-testid='pagination-next']")
+            )
         )
 
         driver.execute_script("arguments[0].click();", next_button)
         time.sleep(2)
 
     except:
-        print("No more pages.")
+        print("No more pages")
         break
 
 driver.quit()
 
+'''wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
+
+soup = BeautifulSoup(driver.page_source, "html.parser")
+results = soup.select("tr.border-base")
+
+for result in results:
+    a_tag = result.select_one("a")
+    if not a_tag:
+        continue
+
+    relative_link = a_tag.get("href")
+    full_link = BASE_DOMAIN + relative_link
+
+    if full_link not in links:
+        links.append(full_link)
+
+print(f"Collected {len(links)} links from first page")
+
+driver.quit()'''
+
+
+############################
+# SCRAPE DETAILS
+############################
+
+rows = []
+
+target_phrases = [
+    "youth employment",
+    "workforce development",
+    "employability",
+    "job placement",
+    "job creation",
+    "livelihoods",
+    "economic empowerment",
+    "economic inclusion",
+    "apprenticeship",
+    "internship",
+    "mentorship",
+    "job readiness",
+    "job search",
+    "labor market activation",
+    "economic participation",
+    "labor market entry",
+    "neet",
+    "work readiness",
+    "job seekers",
+    "early-career",
+    "access to opportunities",
+    "reducing inequalities",
+    "skills development",
+    "vocational training",
+    "technical training",
+    "soft skills",
+    "digital skills",
+    "vocational skills",
+    "technical skills",
+    "green jobs",
+    "green skills",
+    "tvet",
+    "upskilling",
+    "reskilling",
+    "employability skills",
+    "curriculum development",
+    "vocational training center",
+    "career center",
+    "ai skills",
+    "climate change",
+    "financial literacy",
+    "circular economy",
+    "higher education",
+    "university",
+    "educational institutions",
+    "life skills",
+    "transversal skills",
+    "entrepreneurial skills",
+    "blended training",
+    "entrepreneurship",
+    "sme development",
+    "private sector development",
+    "self employment",
+    "virtual jobs",
+    "income generation",
+    "startup incubation",
+    "employer engagement",
+    "business acceleration",
+    "micro entrepreneurship",
+    "new business creation",
+    "sme",
+    "incubation",
+    "green entreprenurship",
+    "women entrepreneurship",
+    "startup",
+    "startup support",
+    "financial inclusion",
+    "home-based businesses",
+    "msme",
+    "microbusiness",
+    "freelance",
+    "gig work",
+    "gig economy",
+    "capacity building",
+    "systems strengthening",
+    "framework",
+    "action plan",
+    "competitiveness",
+    "skills gaps",
+    "business association",
+    "chamber of commerce",
+    "industry federation",
+]
+
+
 for detail_link in links:
 
     try:
+
         response = requests.get(detail_link)
         soup = BeautifulSoup(response.text, "html.parser")
 
         title_tag = soup.select_one(
             "h2.margin-bottom-0.tablet-lg\\:font-sans-xl.desktop-lg\\:font-sans-2xl.margin-top-0"
         )
+
         grant_name = title_tag.get_text(strip=True) if title_tag else None
 
         agency = None
         p_tag = soup.select_one("p.usa-intro")
+
         if p_tag:
             agency = p_tag.get_text(strip=True).replace("Agency:", "").strip()
 
         deadline = None
+
         for tag in soup.find_all("div", class_="usa-tag"):
             if "Closing:" in tag.get_text():
                 span = tag.find("span")
@@ -92,6 +316,7 @@ for detail_link in links:
         blocks = soup.select('div[data-testid="grid"]')
 
         for block in blocks:
+
             value_tag = block.select_one("p.font-sans-sm.text-bold")
             label_tag = block.select_one("p.desktop-lg\\:font-sans-sm")
 
@@ -103,100 +328,171 @@ for detail_link in links:
 
             try:
                 numeric_value = int(
-                    value_text.replace("$", "").replace(",", "").strip()
+                    value_text.replace("$", "").replace(",", "")
                 )
-            except ValueError:
+            except:
                 numeric_value = 0
 
             if "Minimum" in label_text:
                 award_min = numeric_value
+
             elif "Maximum" in label_text:
                 award_max = numeric_value
-
-        description = None
-
-        header = soup.find("h2", string=lambda x: x and "Description" in x)
-
-        if header:
-            div = header.find_next("div")
-
-            if div:
-                first_p = div.find("p")
-
-                if first_p:
-                    # Case 1: multiple <p> tags → use first one
-                    description = first_p.get_text(strip=True)
-                else:
-                    # Case 2: no <p> tags → get full div text
-                    description = div.get_text(strip=True)
 
         documents = [a["href"] for a in soup.select('tbody a.usa-link')]
 
         application_link = None
 
         span = soup.find("span", string="View on Grants.gov")
+
         if span:
             parent_a = span.find_parent("a")
+
             if parent_a:
                 application_link = parent_a.get("href")
 
-        rows.append({
-            "Grant Name": grant_name,
-            "Agency": agency,
-            "Due Date": deadline,
-            "Award Minimum": award_min,
-            "Award Maximum": award_max,
-            "Description": description,
-            "Documents": documents,
-            "Application Link": application_link
-        })
+        description = None
 
-        print(f"Scraped: {grant_name}")
+        header = soup.find("h2", string=lambda x: x and "Description" in x)
+
+        if header:
+
+            div = header.find_next("div")
+
+            if div:
+
+                description = div.get_text(separator="\n", strip=True)
+
+                match_count = sum(
+                    1 for phrase in target_phrases
+                    if phrase in description.lower()
+                )
+
+                if match_count >= 1:
+
+                    row = {
+                        "Grant Name": grant_name,
+                        "Agency": agency,
+                        "Due Date": deadline,
+                        "Award Minimum": award_min,
+                        "Award Maximum": award_max,
+                        "Description": description,
+                        "Documents": documents,
+                        "Application Link": application_link
+                    }
+
+                    rows.append(row)
+
+                    download_documents(grant_name, documents)
+
+        print("Scraped:", grant_name)
 
         time.sleep(1)
 
     except Exception as e:
-        print(f"Error scraping {detail_link}: {e}")
-        continue
+        print("Error scraping:", e)
+
+
+############################
+# DATAFRAME
+############################
 
 df = pd.DataFrame(rows)
 
 df["Documents"] = df["Documents"].apply(json.dumps)
 
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+############################
+# UPDATE EXCEL
+############################
 
-creds = Credentials.from_service_account_file(
-    "service_account.json",
-    scopes=SCOPES
-)
+if os.path.exists(EXCEL_FILE):
 
-client = gspread.authorize(creds)
-
-sheet = client.open("EFE Web Scraper")
-worksheet = sheet.worksheet("SimplerGrants")
-
-existing_df = get_as_dataframe(worksheet).dropna(how="all")
-
-if len(existing_df) == 0:
-    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
-    print("First run — wrote full dataset")
-
-else:
+    existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
 
     existing_links = set(existing_df["Application Link"])
 
     new_rows = df[~df["Application Link"].isin(existing_links)]
 
     if not new_rows.empty:
-        worksheet.append_rows(
-            new_rows.values.tolist(),
-            value_input_option="RAW"
-        )
+
+        with pd.ExcelWriter(
+            EXCEL_FILE,
+            engine="openpyxl",
+            mode="a",
+            if_sheet_exists="overlay"
+        ) as writer:
+
+            startrow = writer.book[SHEET_NAME].max_row
+
+            new_rows.to_excel(
+                writer,
+                sheet_name=SHEET_NAME,
+                startrow=startrow,
+                index=False,
+                header=False
+            )
 
         print(f"Added {len(new_rows)} new grants")
+
     else:
-        print("No new grants found")
+        print("No new grants")
+
+else:
+
+    if os.path.exists(EXCEL_FILE):
+
+        book = load_workbook(EXCEL_FILE)
+
+        if SHEET_NAME in book.sheetnames:
+
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+
+            existing_links = set(existing_df["Application Link"])
+
+            new_rows = df[~df["Application Link"].isin(existing_links)]
+
+            if not new_rows.empty:
+                with pd.ExcelWriter(
+                        EXCEL_FILE,
+                        engine="openpyxl",
+                        mode="a",
+                        if_sheet_exists="overlay"
+                ) as writer:
+                    startrow = writer.book[SHEET_NAME].max_row
+
+                    new_rows.to_excel(
+                        writer,
+                        sheet_name=SHEET_NAME,
+                        startrow=startrow,
+                        index=False,
+                        header=False
+                    )
+
+        else:
+
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+
+    else:
+
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+
+    print("Created new Excel file")
+
+
+############################
+# ZIP DOCUMENTS
+############################
+
+zip_file = "SimplerGrants_docs.zip"
+
+shutil.make_archive("SimplerGrants_docs", "zip", BASE_DOWNLOAD_DIR)
+
+
+############################
+# UPLOAD TO ONEDRIVE
+############################
+
+upload_to_onedrive(EXCEL_FILE, f"{ONEDRIVE_FOLDER}/SimplerGrants.xlsx")
+upload_to_onedrive(zip_file, f"{ONEDRIVE_FOLDER}/SimplerGrants_docs.zip")
