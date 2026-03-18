@@ -1,6 +1,12 @@
-//format this
+## Setup Instructions
 
-Need to create Gemini API key, store in .env file.
-Need requirements.txt (selenium, gemini ai package, beautiful soup?)
+1. **Create a Gemini API Key**
+   - Go to the Gemini portal and generate an API key.
 
-test
+2. **Store the API Key**
+   - Create a `.env` file in the project root.
+   - Add your API key to the file
+
+3. **Install Dependencies**
+
+
