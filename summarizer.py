@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-summarizer.py
+ai_summary.py
 Generates AI summaries for grant entries using Google Gemini.
-
-Usage:
-  from summarizer import generate_summary
-  grant["summary"] = generate_summary(grant)
-
 Requires GEMINI_API_KEY in a .env file or environment variable.
 """
+
+# Current Issues: sam is too slow, simpler is not working, rate limits and quotas are being exceeded
+# Fixes: might need to buy better tier or switch 
 
 import os
 import re
@@ -18,35 +16,10 @@ from google import genai
 
 load_dotenv()
 
-_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-# Enforce a minimum gap between API calls to stay under the free-tier RPM limit.
-# Gemini Flash free tier is ~10 RPM; 7 s between calls gives ~8.5 RPM headroom.
-_MIN_CALL_GAP = 7.0
-_last_call_time = 0.0
-
-
-def _rate_limit():
-    """Block until at least _MIN_CALL_GAP seconds have passed since the last call."""
-    global _last_call_time
-    elapsed = time.monotonic() - _last_call_time
-    if elapsed < _MIN_CALL_GAP:
-        time.sleep(_MIN_CALL_GAP - elapsed)
-    _last_call_time = time.monotonic()
-
-
-def _is_rate_limit_error(e: Exception) -> bool:
-    msg = str(e).lower()
-    return "429" in msg or "quota" in msg or "rate" in msg or "ratelimit" in msg
-
-
+# IMPACT FUNDING 
 def generate_summary(grant: dict) -> str:
-    """
-    Produce a 2-3 sentence summary for a grant using Gemini.
-
-    Returns the generated summary string, or falls back to the original
-    description if all retries are exhausted.
-    """
     description = grant.get("description", "").strip()
 
     prompt = (
@@ -64,26 +37,132 @@ def generate_summary(grant: dict) -> str:
     if description:
         prompt += f"\nAdditional context:\n{description}"
 
-    backoff = 60  # initial wait on rate-limit error (seconds)
-    for attempt in range(5):
-        _rate_limit()
+    for attempt in range(3):
         try:
-            response = _client.models.generate_content(
+            response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt,
             )
             return response.text.strip()
         except Exception as e:
-            if not _is_rate_limit_error(e):
-                print(f"    [WARN] Gemini error (non-rate-limit): {e}")
-                return description
-
-            # Try to read the suggested retry delay from the error message
-            suggested = re.search(r"retrydelay[^\d]*(\d+)", str(e).lower())
-            wait = int(suggested.group(1)) + 5 if suggested else backoff
-            print(f"    [WARN] Rate limit hit, waiting {wait}s (attempt {attempt+1}/5)...")
+            msg = str(e)
+            delay = re.search(r"retryDelay.*?(\d+)s", msg)
+            wait = int(delay.group(1)) + 2 if delay else 60
+            print(f"    [WARN] Gemini rate limit hit, retrying in {wait}s (attempt {attempt+1}/3)...")
             time.sleep(wait)
-            backoff = min(backoff * 2, 300)  # exponential backoff, cap at 5 min
+    return description 
 
-    print("    [WARN] All retries exhausted; using raw description as fallback.")
-    return description
+
+# SIMPLER GRANTS 
+
+def generate_simpler_summary(text):
+    if not text or len(text.strip()) < 50:
+        return ""
+
+    prompt = f"""
+
+Summarize this grant opportunity in one concise sentence.
+Focus on the goal of the grant and the target beneficiaries.
+
+Grant description:
+{text}
+"""
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        if response and response.text:
+            return response.text.strip()
+        else:
+            return ""
+
+    except Exception as e:
+        print("AI summary error:", e)
+        return ""
+
+
+
+
+# DARPE 
+
+def generate_darpe_summary(text):
+
+    if not text or len(text.strip()) < 50:
+        return ""
+
+    prompt = f"""
+Summarize this grant or tender opportunity in one concise sentence.
+Focus on the goal of the funding and the target beneficiaries.
+
+Text:
+{text}
+"""
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+
+        if response and response.text:
+            return response.text.strip()
+
+        return ""
+
+    except Exception as e:
+        print("AI summary error:", e)
+        return ""
+    
+
+# SAM.GOV (SLOW)
+def generate_sam_summary(opportunity: dict) -> str:
+    """
+    Generate a concise AI summary for a SAM opportunity.
+
+    Uses the opportunity's body text if available, otherwise falls back
+    on structured fields (title, donor, sector, eligibility, geography, etc.)
+    """
+    body_text = opportunity.get("body", "").strip()
+
+    structured_text = (
+        f"Title: {opportunity.get('Title', '')}\n"
+        f"Donor: {opportunity.get('Donor Name', '')}\n"
+        f"Geography: {opportunity.get('Geographic Area', '')}\n"
+        f"Sector: {opportunity.get('Focus / Sector', '')}\n"
+        f"Eligibility: {opportunity.get('Eligibility', '')}\n"
+        f"Amount: {opportunity.get('Amount Max (USD)', '')}\n"
+        f"Deadline: {opportunity.get('Application Deadline', '')}"
+    )
+
+    text_to_summarize = body_text if body_text else structured_text
+
+    if not text_to_summarize or len(text_to_summarize) < 50:
+        return ""
+
+    prompt = f"""
+Summarize this SAM.gov grant/tender opportunity in 2-3 concise sentences.
+Focus on who can apply, what is funded, and the geographic scope.
+
+Text:
+{text_to_summarize}
+"""
+
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            if response and response.text:
+                return response.text.strip()
+        except Exception as e:
+            msg = str(e)
+            delay = re.search(r"retryDelay.*?(\d+)s", msg)
+            wait = int(delay.group(1)) + 2 if delay else 60
+            print(f"    [WARN] Gemini rate limit hit, retrying in {wait}s (attempt {attempt+1}/3)...")
+            time.sleep(wait)
+
+    return text_to_summarize
