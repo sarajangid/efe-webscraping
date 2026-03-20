@@ -1,0 +1,88 @@
+{
+    "@context": "https://schema.org",
+    "@graph": [
+        {
+            "@type": "BreadcrumbList",
+            "@id": "https://darpe.me/tenders-and-grants/#breadcrumblist",
+            "itemListElement": [
+                {
+                    "@type": "ListItem",
+                    "@id": "https://darpe.me/#listItem",
+                    "position": 1,
+                    "name": "Home",
+                    "item": "https://darpe.me/",
+                    "nextItem": {
+                        "@type": "ListItem",
+                        "@id": "https://darpe.me/tenders-and-grants/#listItem",
+                        "name": "Tenders & Grants"
+                    }
+                },
+                {
+                    "@type": "ListItem",
+                    "@id": "https://darpe.me/tenders-and-grants/#listItem",
+                    "position": 2,
+                    "name": "Tenders & Grants",
+                    "previousItem": {
+                        "@type": "ListItem",
+                        "@id": "https://darpe.me/#listItem",
+                        "name": "Home"
+                    }
+                }
+            ]
+        },
+        {
+            "@type": "Organization",
+            "@id": "https://darpe.me/#organization",
+            "name": "DARPE",
+            "description": "Development Aid Market of the Middle East",
+            "url": "https://darpe.me/",
+            "email": "info@darpe.me",
+            "telephone": "+201015294380",
+            "foundingDate": "2014-11-01",
+            "logo": {
+                "@type": "ImageObject",
+                "url": "https://darpe.me/wp-content/uploads/2024/08/DARPE-fav-icon.png",
+                "@id": "https://darpe.me/tenders-and-grants/#organizationLogo",
+                "width": 144,
+                "height": 144,
+                "caption": "#image_title"
+            },
+            "image": {
+                "@id": "https://darpe.me/tenders-and-grants/#organizationLogo"
+            },
+            "sameAs": [
+                "https://www.facebook.com/DARPEPlatform",
+                "https://twitter.com/darpe_me",
+                "https://www.youtube.com/@darpe-platform",
+                "https://www.linkedin.com/company/darpe/"
+            ]
+        },
+        {
+            "@type": "WebPage",
+            "@id": "https://darpe.me/tenders-and-grants/#webpage",
+            "url": "https://darpe.me/tenders-and-grants/",
+            "name": "Tenders & Grants",
+            "inLanguage": "en-GB",
+            "isPartOf": {
+                "@id": "https://darpe.me/#website"
+            },
+            "breadcrumb": {
+                "@id": "https://darpe.me/tenders-and-grants/#breadcrumblist"
+            },
+            "datePublished": "2015-11-01T12:58:53+02:00",
+            "dateModified": "2024-09-22T15:55:53+02:00"
+        },
+        {
+            "@type": "WebSite",
+            "@id": "https://darpe.me/#website",
+            "url": "https://darpe.me/",
+            "name": "DARPE",
+            "alternateName": "DARPE",
+            "description": "Development Aid Market of the Middle East",
+            "inLanguage": "en-GB",
+            "publisher": {
+                "@id": "https://darpe.me/#organization"
+            }
+        }
+    ]
+}
