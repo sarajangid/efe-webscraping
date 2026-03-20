@@ -1,42 +1,10 @@
+from summarizer import generate_sam_summary
 import argparse, re, time
-from datetime import datetime
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+from reqs import *
 
 BASE_URL = "https://www.developmentaid.org/tenders/search?sort=relevance.desc&searchedText=grants"
-
-MENA_COUNTRIES = [
-    "Morocco","Algeria","Tunisia","Egypt","Jordan","Palestine","Palestinian",
-    "West Bank","Gaza","Yemen","UAE","United Arab Emirates","Saudi Arabia",
-    "Lebanon","Bahrain","Syria","MENA","Middle East","North Africa",
-    "Arab World","GCC","Maghreb","Levant",
-]
-
-KEYWORDS = [
-    "youth employment","workforce development","employability","job placement",
-    "job creation","livelihoods","economic empowerment","economic inclusion",
-    "apprenticeship","internship","mentorship","job readiness","job search",
-    "labor market activation","economic participation","labor market entry",
-    "NEET","work readiness","job seekers","early-career","reducing inequalities",
-    "skills development","vocational training","technical training","soft skills",
-    "digital skills","green jobs","green skills","TVET","upskilling","reskilling",
-    "employability skills","curriculum development","financial literacy",
-    "circular economy","life skills","entrepreneurial skills","blended training",
-    "entrepreneurship","SME development","private sector development",
-    "self employment","income generation","startup incubation","employer engagement",
-    "business acceleration","micro entrepreneurship","SME","green entrepreneurship",
-    "women entrepreneurship","startup support","financial inclusion","MSME",
-    "microbusiness","freelance","gig economy","capacity building",
-    "systems strengthening","competitiveness","skills gaps","business association",
-    "chamber of commerce","industry federation",
-]
-
-COLUMNS = [
-    "Opportunity ID","Opportunity Type","Title","Donor Name","Geographic Area",
-    "Focus / Sector","Application Deadline","Amount Min (USD)","Amount Max (USD)",
-    "Eligibility","Matched Keywords","Source Link","Original Link",
-    "Date Posted","Date Scraped",
-]
 
 def norm(text):
     return re.sub(r"\s+", " ", text or "").strip()
@@ -105,6 +73,18 @@ def scrape_detail(page, href, source_url):
         get(page, "[class*='amount'],[class*='Amount'],[class*='budget'],[class*='Budget'],[class*='funding']")
     )
 
+    # Build opportunity dict for AI summary
+    opportunity = {
+        "Title": get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A",
+        "Donor Name": get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']"),
+        "Geographic Area": geo or ", ".join(mena_hits),
+        "Focus / Sector": get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']"),
+        "Eligibility": get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']"),
+        "Amount Max (USD)": amt_max,
+        "Application Deadline": get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]"),
+    }
+    ai_summary = generate_sam_summary(opportunity)
+
     return {
         "Opportunity ID":       opp_id,
         "Opportunity Type":     opp_type or "Grant",
@@ -120,7 +100,7 @@ def scrape_detail(page, href, source_url):
         "Source Link":          source_url,
         "Original Link":        href,
         "Date Posted":          get(page, "[class*='posted'],[class*='Published'],[class*='published'],time"),
-        "Date Scraped":         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "AI Summary":           ai_summary
     }
 
 def run(max_pages=10, headless=False):
