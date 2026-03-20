@@ -59,9 +59,9 @@ def download_documents(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
             print("Download error:", e)
 
 
-def upload_to_onedrive(USER_ID, TOKEN, local_path, remote_path):
+def upload_to_onedrive(SITE_ID, TOKEN, local_path, remote_path):
 
-    url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/drive/root:/{remote_path}:/content"
+    url = f"https://graph.microsoft.com/v1.0/sites/{SITE_ID}/drive/root:/{remote_path}:/content"
 
     headers = {
         "Authorization": f"Bearer {TOKEN}",
