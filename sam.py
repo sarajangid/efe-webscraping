@@ -11,8 +11,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
 MAX_PAGES = 10
-MAX_WORKERS = 5  # number of reusable drivers in the pool
-
+MAX_WORKERS = 10  # number of reusable drivers in the pool
 MENA_COUNTRIES = [
     "Morocco", "Algeria", "Tunisia", "Egypt", "Jordan",
     "Palestine", "Palestinian", "West Bank", "Gaza", "Yemen",
@@ -24,7 +23,6 @@ _MENA_RE = re.compile(
     r"\b(" + "|".join(re.escape(c) for c in MENA_COUNTRIES) + r")\b",
     re.IGNORECASE,
 )
-
 KEYWORDS = [
     "youth employment", "workforce development", "employability", "job placement",
     "job creation", "livelihoods", "economic empowerment", "economic inclusion",
@@ -43,14 +41,12 @@ KEYWORDS = [
     "systems strengthening", "competitiveness", "skills gaps", "business association",
     "chamber of commerce", "industry federation",
 ]
-
 COLUMNS = [
     "Opportunity ID", "Opportunity Type", "Title", "Donor Name", "Geographic Area",
     "Focus / Sector", "Application Deadline", "Amount Min (USD)", "Amount Max (USD)",
     "Eligibility", "Matched Keywords", "Source Link", "Original Link",
     "Date Posted", "Date Scraped",
 ]
-
 SECTOR_MAP = {
     "Youth Workforce Development": {
         "youth employment", "job placement", "job readiness", "neet", "work readiness",
@@ -78,13 +74,11 @@ SECTOR_MAP = {
     },
 }
 
-
 def extract_mena(text):
     found = set()
     for m in _MENA_RE.findall(text or ""):
         for c in MENA_COUNTRIES:
-            if m.lower() == c.lower():
-                found.add(c)
+            if m.lower() == c.lower(): found.add(c)
     return sorted(found)
 
 def find_keywords(text):
@@ -147,8 +141,7 @@ def _safe_hrefs(driver):
     for el in driver.find_elements(By.CSS_SELECTOR, "a[href*='/opp/']"):
         try:
             href = el.get_attribute("href")
-            if href and "/opp/" in href:
-                hrefs.append(href)
+            if href and "/opp/" in href: hrefs.append(href)
         except StaleElementReferenceException:
             continue
     return list(set(hrefs))
@@ -202,7 +195,6 @@ def _scrape_opp(opp_url, driver):
         if opp_type and not any(a in opp_type.lower() for a in allowed):
             print(f"    [filtered] opp_type='{opp_type}' | {opp_id}")
             return None
-
         mena = extract_mena(body)
         if not mena:
             print(f"    [filtered] no MENA | opp_type='{opp_type}' | body[:300]: {body[:300]!r}")
@@ -211,16 +203,13 @@ def _scrape_opp(opp_url, driver):
         if not matched:
             print(f"    [filtered] no keywords | mena={mena} | {opp_id}")
             return None
-
         external = []
         for a in driver.find_elements(By.CSS_SELECTOR, "a[href^='http']"):
             try:
                 href = a.get_attribute("href")
-                if href and "sam.gov" not in href:
-                    external.append(href)
+                if href and "sam.gov" not in href: external.append(href)
             except StaleElementReferenceException:
                 continue
-
         return {
             "Opportunity ID":       opp_id,
             "Opportunity Type":     opp_type,
@@ -262,7 +251,6 @@ def scrape_keyword(keyword, existing_ids, nav_driver, driver_pool):
                 existing_ids.add(row["Opportunity ID"])
     return rows
 
-
 def main():
     df, existing_ids = create_df(), set()
     nav_driver = _make_driver()
@@ -281,8 +269,8 @@ def main():
         for d in workers:
             d.quit()
     print(f"\nDone. Total opportunities: {len(df)}")
+    print(df)
     return df
-
 
 if __name__ == "__main__":
     main()
