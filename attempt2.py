@@ -1,4 +1,6 @@
 import re
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import time
 import requests
 import pandas as pd
@@ -6,6 +8,54 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+# value = os.getenv("MY_KEY")
+
+# # 1. Start a session
+# session = requests.Session()
+
+# # # Optional: Add headers so you look like a real browser
+# # session.headers.update({
+# #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+# # })
+
+# login_url = "https://example.com/login_endpoint" # The URL the form submits to
+# target_url = "https://example.com/protected-detail-page" # The page you actually want to scrape
+
+# user_field_name = os.getenv("USER_FIELD_NAME")
+# username = os.getenv("USER_NAME")
+# pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
+# password = os.getenv("PASSWORD")
+
+
+# # 2. Create your payload using the exact field names the site expects
+# login_data = {
+#     user_field_name: username,
+#     pass_field_name: password,
+#     # Sometimes you need a hidden token here too, like an anti-CSRF token
+# }
+
+# # 3. Send the login request
+# print("Logging in...")
+# login_response = session.post(login_url, data=login_data, verify=False)
+
+# # Optional: Check if login was successful by looking for a specific word in the response
+# if "Sign Out" in login_response.text:
+#     print("Login successful!")
+# else:
+#     print("Login might have failed. Check credentials or hidden tokens.")
+
+# # 4. Request the protected page using the SAME session
+# detail_response = session.get(target_url)
+
+# # 5. Parse the protected HTML
+# soup = BeautifulSoup(detail_response.text, "html.parser")
+
+# # Now you can search for your target elements!
+# target_div = soup.select("div.gray_bg") 
 
 BASE_URL = "https://darpe.me"
 LISTING_URL = "https://darpe.me/tenders-and-grants/"  # replace with actual listing URL
