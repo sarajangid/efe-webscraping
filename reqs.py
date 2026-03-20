@@ -28,5 +28,5 @@ COLUMNS = [
     "Opportunity ID","Opportunity Type","Title","Donor Name","Geographic Area",
     "Focus / Sector","Application Deadline","Amount Min (USD)","Amount Max (USD)",
     "Eligibility","Matched Keywords","Source Link","Original Link",
-    "Date Posted"
+    "Date Posted", "AI Summary"
 ]
