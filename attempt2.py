@@ -326,19 +326,53 @@ def apply_filters(df):
     df["passes_all"]        = df["filter_workforce"] & df["filter_type"] & df["filter_geography"]
     return df
 
-
+def get_total_pages():
+    html = fetch_html(LISTING_URL)
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # grab all page number links and find the highest one
+    page_links = soup.select("a.page-numbers")
+    page_numbers = []
+    for link in page_links:
+        text = link.get_text(strip=True).replace(",", "")  # removes comma from "1,913"
+        if text.isdigit():
+            page_numbers.append(int(text))
+    
+    return max(page_numbers) if page_numbers else 1
+total_pages = get_total_pages()
+# print("total:", total_pages)
 #RUNS THE ACTUAL CODE:
 
-html = fetch_html(LISTING_URL)
-listing_items = extract_listing_rows(html)
+MAX_PAGES = 5 # ← change this to however many pages you want
 
-df = pd.DataFrame(listing_items)
-#df with true or false value whether it matches a requirement
+all_items = []
+
+for page_num in range(1, MAX_PAGES + 1):
+    print(f"Scraping page {page_num} of {MAX_PAGES}...")
+    
+    if page_num == 1:
+        page_url = LISTING_URL
+    else:
+        page_url = f"{BASE_URL}/tenders-and-grants/page/{page_num}/"
+    
+    html = fetch_html(page_url)
+    items = extract_listing_rows(html)
+    
+    if not items:
+        print(f"No items found on page {page_num}, stopping early.")
+        break
+    
+    all_items.extend(items)
+    time.sleep(1)
+
+print(f"Total items scraped: {len(all_items)}")
+
+df = pd.DataFrame(all_items)
+# df with true or false value whether it matches a requirement
 df = apply_filters(df)
 
-#df with only the true values from above
+# df with only the true values from above
 df = df[df["passes_all"] == True]
-# print(df.head())
 
 #CONVERTING TO EXCEL SPREADSHEET
 wb = Workbook()
