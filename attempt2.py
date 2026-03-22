@@ -12,47 +12,54 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
-# value = os.getenv("MY_KEY")
 
-# # 1. Start a session
-# session = requests.Session()
+# 1. Start a session
+session = requests.Session()
 
-# # # Optional: Add headers so you look like a real browser
-# # session.headers.update({
-# #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-# # })
+# # Optional: Add headers so you look like a real browser
+# session.headers.update({
+#     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+# })
 
-# login_url = "https://example.com/login_endpoint" # The URL the form submits to
-# target_url = "https://example.com/protected-detail-page" # The page you actually want to scrape
+login_url = "https://darpe.me/darpe-login.php" # The URL the form submits to
+target_url = "https://darpe.me/tenders-and-grants/" # The page you actually want to scrape
 
-# user_field_name = os.getenv("USER_FIELD_NAME")
-# username = os.getenv("USER_NAME")
-# pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
-# password = os.getenv("PASSWORD")
+user_field_name = os.getenv("USER_FIELD_NAME")
+username = os.getenv("USER_NAME")
+pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
+password = os.getenv("PASSWORD")
 
 
-# # 2. Create your payload using the exact field names the site expects
+# 2. Create your payload using the exact field names the site expects
 # login_data = {
 #     user_field_name: username,
 #     pass_field_name: password,
-#     # Sometimes you need a hidden token here too, like an anti-CSRF token
+    # Sometimes you need a hidden token here too, like an anti-CSRF token
 # }
 
-# # 3. Send the login request
-# print("Logging in...")
-# login_response = session.post(login_url, data=login_data, verify=False)
+login_data = {
+    "log": username,
+    "pwd": password,
+    "wp-submit": "Sign in",
+    "redirect_to": "https://darpe.me"
+    # Sometimes you need a hidden token here too, like an anti-CSRF token
+}
 
+# 3. Send the login request
+print("Logging in...")
+login_response = session.post(login_url, data=login_data)
+
+# print(login_response.url)   
 # # Optional: Check if login was successful by looking for a specific word in the response
 # if "Sign Out" in login_response.text:
 #     print("Login successful!")
 # else:
 #     print("Login might have failed. Check credentials or hidden tokens.")
 
-# # 4. Request the protected page using the SAME session
-# detail_response = session.get(target_url)
+detail_response = session.get(target_url)
 
-# # 5. Parse the protected HTML
-# soup = BeautifulSoup(detail_response.text, "html.parser")
+# 5. Parse the protected HTML
+soup = BeautifulSoup(detail_response.text, "html.parser")
 
 # # Now you can search for your target elements!
 # target_div = soup.select("div.gray_bg") 
@@ -100,11 +107,11 @@ def extract_listing_rows(html):
             listing_type = "Other"
 
 
-        # 1) title + detail page link
+        # 1) title 
         title_link = row.select_one("a[href*='darpe-entries']")
         title = clean_text(title_link.get_text()) if title_link else ""
         detail_page_url = urljoin(BASE_URL, title_link["href"]) if title_link and title_link.has_attr("href") else ""
-
+        
         # 2) donor name from "Client Name : ..."
         donor_name = ""
         if title_link:
@@ -122,11 +129,18 @@ def extract_listing_rows(html):
         geographic_area = clean_text(tds[4].get_text(" ", strip=True)) if len(tds) > 4 else ""
 
         # Access inner link
+        info_soup = None
         try:
-            res = requests.get(detail_page_url, headers=HEADERS)
+            res = session.get(detail_page_url, headers=HEADERS)  # use session!
             res.raise_for_status()
-
             info_soup = BeautifulSoup(res.text, "html.parser")
+        except Exception as e:
+            print(f"Error crawling {detail_page_url}: {e}")
+        # if info_soup:
+        #     res = requests.get(detail_page_url, headers=HEADERS)
+        #     res.raise_for_status()
+
+            # info_soup = BeautifulSoup(res.text, "html.parser")
 
             page_title = info_soup.title.get_text(strip=True) if info_soup.title else "No Title"
             # print(f"Landed on page: {page_title}")
@@ -142,14 +156,27 @@ def extract_listing_rows(html):
             # if not lis:
             #     continue
             # print(lis)
-        except Exception as e:
-            print(f"Error crawling {detail_page_url}: {e}")
+        # except Exception as e:
+        #     print(f"Error crawling {detail_page_url}: {e}")
         
-        # 6) pdfs
-        # follow up once we get access
+        # 6) attachments
+        attachment_urls = []
+        if info_soup:
+            # find the "Attachments" heading
+            attachments_heading = info_soup.find(lambda tag: tag.name and "Attachments" in tag.get_text() and tag.name in ["p", "h2", "h3", "h4", "strong", "b"])
+            if attachments_heading:
+                parent_li = attachments_heading.find_parent("li")
+                if parent_li:
+                    attachment_urls = [a["href"] for a in parent_li.find_all("a", href=True)]
 
         # 7) og link
-        # follow up once we get access
+        og_link = ""
+        if info_soup:
+            bold_p = info_soup.find("p", style=lambda s: s and "font-weight:bold" in s, string=lambda t: t and "Link to original" in t)
+            if bold_p:
+                parent_li = bold_p.find_parent("li")
+                og_anchor = parent_li.find("a", href=True) if parent_li else None
+                og_link = og_anchor["href"] if og_anchor else ""
 
         results.append({
             "type": listing_type,
@@ -159,13 +186,15 @@ def extract_listing_rows(html):
             "deadline": deadline,
             "focus_sector": focus_sector,
             "geographic_area": geographic_area,
+            "attachments": attachment_urls,
+            "original link": og_link
         })
 
     return results
 
 #makes http get request
 def fetch_html(url):
-    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp = session.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -317,7 +346,8 @@ ws = wb.active
 ws.title = "Tenders & Grants"
 
 # Header row
-headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Amount (USD)", "Eligibility"]
+headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
+           "Amount (USD)", "Eligibility"]
 ws.append(headers)
 
 # Style header row
@@ -336,6 +366,8 @@ for _, row in df.iterrows():
         row["focus_sector"],
         row["deadline"],
         row["detail_page_url"],
+        row["original link"],
+        ", ".join(row["attachments"]) if row["attachments"] else "",
         "",  # Amount USD (cannot find so filler for now)
         ""   # Eligibility (cannot find so filler for now)
     ])
@@ -352,60 +384,3 @@ ws.freeze_panes = "A2"
 
 wb.save("tenders_grants.xlsx")
 print("Saved to tenders_grants.xlsx")
-
-# #TRYING TO EXACT FOR INDIVIDUAL PAGES
-# def extract_detail_page(detail_url):
-#     html = fetch_html(detail_url)
-#     soup = BeautifulSoup(html, "html.parser")
-
-#     # collect all links
-#     links = []
-#     for a in soup.find_all("a", href=True):
-#         href = urljoin(detail_url, a["href"])
-#         text = clean_text(a.get_text(" ", strip=True))
-#         links.append({"text": text, "href": href})
-
-#     # PDFs
-#     pdf_links = [link["href"] for link in links if ".pdf" in link["href"].lower()]
-
-#     # source/original link heuristics
-#     source_link = ""
-#     original_link = ""
-
-#     for link in links:
-#         text_lower = link["text"].lower()
-#         href_lower = link["href"].lower()
-
-#         if not source_link and ("source" in text_lower or "official" in text_lower):
-#             source_link = link["href"]
-
-#         if not original_link and ("original" in text_lower or "apply" in text_lower or "full notice" in text_lower):
-#             original_link = link["href"]
-
-#     # if there are no labeled links, try picking first non-darpe external link
-#     external_links = [
-#         link["href"] for link in links
-#         if "darpe.me" not in link["href"]
-#     ]
-
-#     if not source_link and external_links:
-#         source_link = external_links[0]
-
-#     if not original_link and len(external_links) > 1:
-#         original_link = external_links[1]
-
-#     # description text
-#     content_candidates = soup.select("article, .entry-content, .post-content, .content, .elementor-widget-container")
-#     full_description = ""
-#     if content_candidates:
-#         full_description = clean_text(" ".join(c.get_text(" ", strip=True) for c in content_candidates))
-#     else:
-#         full_description = clean_text(soup.get_text(" ", strip=True))
-
-#     return {
-#         "pdf_links": pdf_links,
-#         "source_link": source_link,
-#         "original_link": original_link,
-#         "full_description": full_description,
-#     }
-    
