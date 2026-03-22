@@ -3,7 +3,7 @@
 Scraper for fundsforngos.org grant listings.
 Saves all grants found across the configured listing URLs.
 
-Output: grants.csv and grants.json
+Output: grants.xlsx
 """
 
 import requests
@@ -12,7 +12,7 @@ import pandas as pd
 import time
 import re
 import logging
-import json
+from summarizer import generate_simpler_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -343,6 +343,8 @@ def main():
             time.sleep(REQUEST_DELAY)
 
             if info:
+                logger.info(f"  Generating AI summary...")
+                info['ai_summary'] = generate_simpler_summary(info.get('summary', ''))
                 all_grants.append(info)
 
     if not all_grants:
@@ -350,13 +352,6 @@ def main():
         return
 
     df = pd.DataFrame(all_grants)
-
-    df.to_csv('grants.csv', index=False)
-    logger.info(f"\nSaved {len(df)} grants → grants.csv")
-
-    with open('grants.json', 'w', encoding='utf-8') as f:
-        json.dump(all_grants, f, indent=2, ensure_ascii=False)
-    logger.info(f"Saved {len(all_grants)} grants → grants.json")
 
     with pd.ExcelWriter('grants.xlsx', engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Grants')
