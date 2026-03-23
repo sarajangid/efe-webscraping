@@ -159,8 +159,7 @@ def extract_listing_rows(html):
             "donor_name": donor_name,
             "deadline": deadline,
             "focus_sector": focus_sector,
-            "geographic_area": geographic_area,
-            "ai_summary": ""
+            "geographic_area": geographic_area
         })
 
     return results
