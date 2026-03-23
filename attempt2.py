@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
+from impact_funding_scraper import generate_darpe_summary
 
 load_dotenv()
 # value = os.getenv("MY_KEY")
@@ -159,6 +160,7 @@ def extract_listing_rows(html):
             "deadline": deadline,
             "focus_sector": focus_sector,
             "geographic_area": geographic_area,
+            "ai_summary": ""
         })
 
     return results
