@@ -1,0 +1,19 @@
+# Web Scraping & Automation
+requests
+beautifulsoup4
+selenium
+webdriver-manager
+playwright
+
+# Data Processing
+pandas
+openpyxl
+
+# AI/ML
+google-genai
+
+# Environment
+python-dotenv
+
+# Utilities
+urllib3

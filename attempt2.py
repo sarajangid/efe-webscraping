@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
+from impact_funding_scraper import generate_summary
 
 load_dotenv()
 
