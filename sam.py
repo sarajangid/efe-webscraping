@@ -2,12 +2,18 @@ import re, time, urllib.parse
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
+from openpyxl.descriptors.serialisable import KEYWORDS
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
 from summarizer import generate_sam_summary
 from reqs import MENA_COUNTRIES, KEYWORDS, COLUMNS
 
@@ -264,6 +270,36 @@ def main():
             d.quit()
     print(f"\nDone. Total opportunities: {len(df)}")
     print(df)
+
+    SHEET_NAME = "sam"
+
+    if os.path.exists(EXCEL_FILE):
+        existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
+
+        if SHEET_NAME in existing_sheets:
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+            existing_links = set(existing_df["Opportunity ID"])
+            new_rows = df[~df["Opportunity ID"].isin(existing_links)]
+
+            if not new_rows.empty:
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                    startrow = writer.book[SHEET_NAME].max_row
+                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
+                print(f"Added {len(new_rows)} new grants")
+            else:
+                print("No new grants")
+
+        else:
+            # File exists but sheet doesn't — add new sheet without touching others
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+            print(f"Created new sheet '{SHEET_NAME}'")
+
+    else:
+        # File doesn't exist at all — create it
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+        print("Created new Excel file")
+
     return df
 
 if __name__ == "__main__":

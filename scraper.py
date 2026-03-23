@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 import json
@@ -8,6 +9,7 @@ import pandas as pd
 from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
+from dotenv import load_dotenv
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -16,10 +18,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-from scraper_config import CLIENT_ID, CLIENT_SECRET, TENANT_ID, SITE_ID
+from upload_to_sharepoint import download_documents
+from summarizer import generate_simpler_summary
 
-# ✅ only import ONE method now
-from upload_to_sharepoint import run_storage_pipeline
+load_dotenv()
+EXCEL_FILE=os.environ["EXCEL_FILE"]
+BASE_DOWNLOAD_DIR = os.environ["BASE_DOWNLOAD_DIR"]
 
 
 ############################
@@ -34,13 +38,9 @@ params = {
     "query": "education science technology engineering math career",
 }
 
-BASE_DOWNLOAD_DIR = "Grants"
-
 SHEET_NAME = "SimplerGrants"
 
-ONEDRIVE_FOLDER = "Grants"
-
-os.makedirs(BASE_DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.join(BASE_DOWNLOAD_DIR,SHEET_NAME), exist_ok=True)
 
 
 ############################
@@ -54,6 +54,7 @@ driver.get(search_url)
 
 wait = WebDriverWait(driver, 10)
 
+rows = []
 links = []
 
 '''while True:
@@ -120,116 +121,23 @@ driver.quit()
 # SCRAPE DETAILS
 ############################
 
-rows = []
-
-target_phrases = [
-    "youth employment",
-    "workforce development",
-    "employability",
-    "job placement",
-    "job creation",
-    "livelihoods",
-    "economic empowerment",
-    "economic inclusion",
-    "apprenticeship",
-    "internship",
-    "mentorship",
-    "job readiness",
-    "job search",
-    "labor market activation",
-    "economic participation",
-    "labor market entry",
-    "neet",
-    "work readiness",
-    "job seekers",
-    "early-career",
-    "access to opportunities",
-    "reducing inequalities",
-    "skills development",
-    "vocational training",
-    "technical training",
-    "soft skills",
-    "digital skills",
-    "vocational skills",
-    "technical skills",
-    "green jobs",
-    "green skills",
-    "tvet",
-    "upskilling",
-    "reskilling",
-    "employability skills",
-    "curriculum development",
-    "vocational training center",
-    "career center",
-    "ai skills",
-    "climate change",
-    "financial literacy",
-    "circular economy",
-    "higher education",
-    "university",
-    "educational institutions",
-    "life skills",
-    "transversal skills",
-    "entrepreneurial skills",
-    "blended training",
-    "entrepreneurship",
-    "sme development",
-    "private sector development",
-    "self employment",
-    "virtual jobs",
-    "income generation",
-    "startup incubation",
-    "employer engagement",
-    "business acceleration",
-    "micro entrepreneurship",
-    "new business creation",
-    "sme",
-    "incubation",
-    "green entreprenurship",
-    "women entrepreneurship",
-    "startup",
-    "startup support",
-    "financial inclusion",
-    "home-based businesses",
-    "msme",
-    "microbusiness",
-    "freelance",
-    "gig work",
-    "gig economy",
-    "capacity building",
-    "systems strengthening",
-    "framework",
-    "action plan",
-    "competitiveness",
-    "skills gaps",
-    "business association",
-    "chamber of commerce",
-    "industry federation",
-]
-
-
 for detail_link in links:
 
     try:
-
         response = requests.get(detail_link)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        '''title_tag = soup.select_one(
-            "h2.margin-bottom-0.tablet-lg\\:font-sans-xl.desktop-lg\\:font-sans-2xl.margin-top-0"
-        )'''
-        title_tag = soup.find("h2")
-
+        title_tag = soup.select_one(
+            "h2"
+        )
         grant_name = title_tag.get_text(strip=True) if title_tag else None
 
         agency = None
         p_tag = soup.select_one("p.usa-intro")
-
         if p_tag:
             agency = p_tag.get_text(strip=True).replace("Agency:", "").strip()
 
         deadline = None
-
         for tag in soup.find_all("div", class_="usa-tag"):
             if "Closing:" in tag.get_text():
                 span = tag.find("span")
@@ -242,7 +150,6 @@ for detail_link in links:
         blocks = soup.select('div[data-testid="grid"]')
 
         for block in blocks:
-
             value_tag = block.select_one("p.font-sans-sm.text-bold")
             label_tag = block.select_one("p.desktop-lg\\:font-sans-sm")
 
@@ -254,49 +161,139 @@ for detail_link in links:
 
             try:
                 numeric_value = int(
-                    value_text.replace("$", "").replace(",", "")
+                    value_text.replace("$", "").replace(",", "").strip()
                 )
-            except:
+            except ValueError:
                 numeric_value = 0
 
             if "Minimum" in label_text:
                 award_min = numeric_value
-
             elif "Maximum" in label_text:
                 award_max = numeric_value
+
+        description = None
+
+        header = soup.find("h2", string=lambda x: x and "Description" in x)
+
+        # Filter: keep only descriptions that mention at least 3 of the target phrases
+        target_phrases = [
+            "youth employment",
+            "workforce development",
+            "employability",
+            "job placement",
+            "job creation",
+            "livelihoods",
+            "economic empowerment",
+            "economic inclusion",
+            "apprenticeship",
+            "internship",
+            "mentorship",
+            "job readiness",
+            "job search",
+            "labor market activation",
+            "economic participation",
+            "labor market entry",
+            "neet",
+            "work readiness",
+            "job seekers",
+            "early-career",
+            "access to opportunities",
+            "reducing inequalities",
+            "skills development",
+            "vocational training",
+            "technical training",
+            "soft skills",
+            "digital skills",
+            "vocational skills",
+            "technical skills",
+            "green jobs",
+            "green skills",
+            "tvet",
+            "upskilling",
+            "reskilling",
+            "employability skills",
+            "curriculum development",
+            "vocational training center",
+            "career center",
+            "ai skills",
+            "climate change",
+            "financial literacy",
+            "circular economy",
+            "higher education",
+            "university",
+            "educational institutions",
+            "life skills",
+            "transversal skills",
+            "entrepreneurial skills",
+            "blended training",
+            "entrepreneurship",
+            "sme development",
+            "private sector development",
+            "self employment",
+            "virtual jobs",
+            "income generation",
+            "startup incubation",
+            "employer engagement",
+            "business acceleration",
+            "micro entrepreneurship",
+            "new business creation",
+            "sme",
+            "incubation",
+            "green entreprenurship",
+            "women entrepreneurship",
+            "startup",
+            "startup support",
+            "financial inclusion",
+            "home-based businesses",
+            "msme",
+            "microbusiness",
+            "freelance",
+            "gig work",
+            "gig economy",
+            "capacity building",
+            "systems strengthening",
+            "framework",
+            "action plan",
+            "competitiveness",
+            "skills gaps",
+            "business association",
+            "chamber of commerce",
+            "industry federation",
+        ]
 
         documents = [a["href"] for a in soup.select('tbody a.usa-link')]
 
         application_link = None
 
         span = soup.find("span", string="View on Grants.gov")
-
         if span:
             parent_a = span.find_parent("a")
-
             if parent_a:
                 application_link = parent_a.get("href")
 
-        description = None
-
-        header = soup.find("h2", string=lambda x: x and "Description" in x)
-
         if header:
-
             div = header.find_next("div")
 
             if div:
+                text = div.get_text(separator="\n", strip=True)
+                first_p = div.find("p")
+                if first_p:
+                    # Case 1: multiple <p> tags → use first one
+                    description = first_p.get_text(strip=True)
 
-                description = div.get_text(separator="\n", strip=True)
+                else:
+                    # Case 2: no <p> tags → get full div text
+                    description = div.get_text(strip=True)
 
-                match_count = sum(
-                    1 for phrase in target_phrases
-                    if phrase in description.lower()
-                )
+                description_text = (text or "").lower()
+                match_count = sum(1 for phrase in target_phrases if phrase in description_text)
 
                 if match_count >= 1:
 
-                    row = {
+                    ai_summary = generate_simpler_summary(description)
+
+                    rows.append({
+                        "Date Scraped": datetime.datetime.now().strftime("%Y-%m-%d"),
                         "Grant Name": grant_name,
                         "Agency": agency,
                         "Due Date": deadline,
@@ -304,12 +301,11 @@ for detail_link in links:
                         "Award Maximum": award_max,
                         "Description": description,
                         "Documents": documents,
-                        "Application Link": application_link
-                    }
+                        "Application Link": application_link,
+                        "AI Summary": ai_summary
+                    })
 
-                    rows.append(row)
-
-        print("Scraped:", grant_name)
+        print(f"Scraped: {grant_name}")
 
         time.sleep(1)
 
@@ -330,41 +326,31 @@ df["Documents"] = df["Documents"].apply(json.dumps)
 # UPDATE EXCEL (UNCHANGED)
 ############################
 
-if os.path.exists("Grants.xlsx"):
+if os.path.exists(EXCEL_FILE):
+    existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
 
-    existing_df = pd.read_excel("Grants.xlsx", sheet_name=SHEET_NAME)
+    if SHEET_NAME in existing_sheets:
+        existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+        existing_links = set(existing_df["Application Link"])
+        new_rows = df[~df["Application Link"].isin(existing_links)]
 
-    existing_links = set(existing_df["Application Link"])
-
-    new_rows = df[~df["Application Link"].isin(existing_links)]
-
-    if not new_rows.empty:
-
-        with pd.ExcelWriter(
-            "Grants.xlsx",
-            engine="openpyxl",
-            mode="a",
-            if_sheet_exists="overlay"
-        ) as writer:
-
-            startrow = writer.book[SHEET_NAME].max_row
-
-            new_rows.to_excel(
-                writer,
-                sheet_name=SHEET_NAME,
-                startrow=startrow,
-                index=False,
-                header=False
-            )
-
-        print(f"Added {len(new_rows)} new grants")
+        if not new_rows.empty:
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                startrow = writer.book[SHEET_NAME].max_row
+                new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
+            print(f"Added {len(new_rows)} new grants")
+        else:
+            print("No new grants")
 
     else:
-        print("No new grants")
+        # File exists but sheet doesn't — add new sheet without touching others
+        with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+            df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+        print(f"Created new sheet '{SHEET_NAME}'")
 
 else:
-
-    df.to_excel("Grants.xlsx", sheet_name=SHEET_NAME, index=False)
+    # File doesn't exist at all — create it
+    df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
     print("Created new Excel file")
 
 
@@ -372,14 +358,8 @@ else:
 # SINGLE CALL TO PIPELINE
 ############################
 
-run_storage_pipeline(
+download_documents(
     rows=rows,
-    BASE_DOWNLOAD_DIR=BASE_DOWNLOAD_DIR,
-    BASE_DOMAIN=BASE_DOMAIN,
-    EXCEL_FILE="Grants.xlsx",
-    ONEDRIVE_FOLDER=ONEDRIVE_FOLDER,
-    TENANT_ID=TENANT_ID,
-    CLIENT_ID=CLIENT_ID,
-    CLIENT_SECRET=CLIENT_SECRET,
-    USER_ID=SITE_ID
+    BASE_DOWNLOAD_DIR=os.path.join(BASE_DOWNLOAD_DIR,SHEET_NAME),
+    BASE_DOMAIN=BASE_DOMAIN
 )

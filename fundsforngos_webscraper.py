@@ -3,7 +3,7 @@
 Scraper for fundsforngos.org grant listings.
 Saves all grants found across the configured listing URLs.
 
-Output: grants.csv and grants.json
+Output: grants.xlsx
 """
 
 import requests
@@ -12,7 +12,12 @@ import pandas as pd
 import time
 import re
 import logging
-import json
+from summarizer import generate_simpler_summary
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -343,6 +348,8 @@ def main():
             time.sleep(REQUEST_DELAY)
 
             if info:
+                logger.info(f"  Generating AI summary...")
+                info['ai_summary'] = generate_simpler_summary(info.get('summary', ''))
                 all_grants.append(info)
 
     if not all_grants:
@@ -351,21 +358,43 @@ def main():
 
     df = pd.DataFrame(all_grants)
 
-    df.to_csv('grants.csv', index=False)
-    logger.info(f"\nSaved {len(df)} grants → grants.csv")
-
-    with open('grants.json', 'w', encoding='utf-8') as f:
-        json.dump(all_grants, f, indent=2, ensure_ascii=False)
-    logger.info(f"Saved {len(all_grants)} grants → grants.json")
-
-    with pd.ExcelWriter('grants.xlsx', engine='openpyxl') as writer:
+    '''with pd.ExcelWriter('grants.xlsx', engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Grants')
         ws = writer.sheets['Grants']
         # Auto-fit column widths
         for col in ws.columns:
             max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 80)
-    logger.info(f"Saved {len(df)} grants → grants.xlsx")
+    logger.info(f"Saved {len(df)} grants → grants.xlsx")'''
+
+    SHEET_NAME = "Funds for NGOs"
+
+    if os.path.exists(EXCEL_FILE):
+        existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
+
+        if SHEET_NAME in existing_sheets:
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+            existing_links = set(existing_df["application_link"])
+            new_rows = df[~df["application_link"].isin(existing_links)]
+
+            if not new_rows.empty:
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                    startrow = writer.book[SHEET_NAME].max_row
+                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
+                print(f"Added {len(new_rows)} new grants")
+            else:
+                print("No new grants")
+
+        else:
+            # File exists but sheet doesn't — add new sheet without touching others
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+            print(f"Created new sheet '{SHEET_NAME}'")
+
+    else:
+        # File doesn't exist at all — create it
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+        print("Created new Excel file")
 
 
 if __name__ == '__main__':
