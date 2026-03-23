@@ -10,7 +10,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
-from impact_funding_scraper import generate_summary
+# from google import genai
+from summarizer import generate_darpe_summary
 
 load_dotenv()
 
@@ -193,6 +194,34 @@ def extract_listing_rows(html):
 
     return results
 
+# def generate_darpe_summary(text):
+
+#     if not text or len(text.strip()) < 50:
+#         return ""
+
+#     prompt = f"""
+#     Summarize this grant or tender opportunity in one concise sentence.
+#     Focus on the goal of the funding and the target beneficiaries.
+
+#     Text:
+#     {text}
+#     """
+
+#     try:
+#         response = client.models.generate_content(
+#             model="gemini-2.5-flash",
+#             contents=prompt
+#         )
+
+#         if response and response.text:
+#             return response.text.strip()
+
+#         return ""
+
+#     except Exception as e:
+#         print("AI summary error:", e)
+#         return ""
+
 #makes http get request
 def fetch_html(url):
     resp = session.get(url, headers=HEADERS, timeout=30)
@@ -374,48 +403,49 @@ df = apply_filters(df)
 
 # df with only the true values from above
 df = df[df["passes_all"] == True]
+print(df.head())
 
-#CONVERTING TO EXCEL SPREADSHEET
-wb = Workbook()
-ws = wb.active
-ws.title = "Tenders & Grants"
+# #CONVERTING TO EXCEL SPREADSHEET
+# wb = Workbook()
+# ws = wb.active
+# ws.title = "Tenders & Grants"
 
-# Header row
-headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
-           "Amount (USD)", "Eligibility"]
-ws.append(headers)
+# # Header row
+# headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
+#            "Amount (USD)", "Eligibility"]
+# ws.append(headers)
 
-# Style header row
-for cell in ws[1]:
-    cell.font = Font(bold=True, color="FFFFFF", name="Arial")
-    cell.fill = PatternFill("solid", start_color="2E4057")
-    cell.alignment = Alignment(horizontal="center")
+# # Style header row
+# for cell in ws[1]:
+#     cell.font = Font(bold=True, color="FFFFFF", name="Arial")
+#     cell.fill = PatternFill("solid", start_color="2E4057")
+#     cell.alignment = Alignment(horizontal="center")
 
-# Data rows
-for _, row in df.iterrows():
-    ws.append([
-        row["title"],
-        row["type"],
-        row["donor_name"],
-        row["geographic_area"],
-        row["focus_sector"],
-        row["deadline"],
-        row["detail_page_url"],
-        row["original link"],
-        ", ".join(row["attachments"]) if row["attachments"] else "",
-        "",  # Amount USD (cannot find so filler for now)
-        ""   # Eligibility (cannot find so filler for now)
-    ])
+# # Data rows
+# for _, row in df.iterrows():
+#     ws.append([
+#         row["title"],
+#         row["type"],
+#         row["donor_name"],
+#         row["geographic_area"],
+#         row["focus_sector"],
+#         row["deadline"],
+#         row["detail_page_url"],
+#         row["original link"],
+#         ", ".join(row["attachments"]) if row["attachments"] else "",
+#         "",  # Amount USD (cannot find so filler for now)
+#         ""   # Eligibility (cannot find so filler for now)
+#     ])
 
-# Auto-fit column widths
-# Auto-fit column widths based on content
-for col in ws.columns:
-    max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
-    adjusted_width = min(max_length + 4, 80)  # +4 padding, cap at 80
-    ws.column_dimensions[col[0].column_letter].width = adjusted_width
+# # Auto-fit column widths
+# # Auto-fit column widths based on content
+# for col in ws.columns:
+#     max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+#     adjusted_width = min(max_length + 4, 80)  # +4 padding, cap at 80
+#     ws.column_dimensions[col[0].column_letter].width = adjusted_width
 
-# Freeze header row
-ws.freeze_panes = "A2"
+# # Freeze header row
+# ws.freeze_panes = "A2"
 
-wb.save("tenders_grants.xlsx")
-print("Saved to tenders_grants.xlsx")
+# wb.save("tenders_grants.xlsx")
+# print("Saved to tenders_grants.xlsx")
