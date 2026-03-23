@@ -78,34 +78,39 @@ def scrape_detail(page, href, source_url):
         get(page, "[class*='amount'],[class*='Amount'],[class*='budget'],[class*='Budget'],[class*='funding']")
     )
 
-    # Build opportunity dict for AI summary
-    opportunity = {
-        "Title": get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A",
-        "Donor Name": get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']"),
-        "Geographic Area": geo or ", ".join(mena_hits),
-        "Focus / Sector": get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']"),
-        "Eligibility": get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']"),
-        "Amount Max (USD)": amt_max,
-        "Application Deadline": get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]"),
-    }
-    ai_summary = generate_sam_summary(opportunity)
+    title = get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A"
+    donor = get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']")
+    sector = get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']")
+    eligibility = get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']")
+    deadline = get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]")
 
     return {
         "Opportunity ID":       opp_id,
         "Opportunity Type":     opp_type or "Grant",
-        "Title":                get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A",
-        "Donor Name":           get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']"),
+        "Title":                title,
+        "Donor Name":           donor,
         "Geographic Area":      geo or ", ".join(mena_hits),
-        "Focus / Sector":       get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']"),
-        "Application Deadline": get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]"),
+        "Focus / Sector":       sector,
+        "Application Deadline": deadline,
         "Amount Min (USD)":     amt_min,
         "Amount Max (USD)":     amt_max,
-        "Eligibility":          get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']"),
+        "Eligibility":          eligibility,
         "Matched Keywords":     "; ".join(kw_hits),
         "Source Link":          source_url,
         "Original Link":        href,
         "Date Posted":          get(page, "[class*='posted'],[class*='Published'],[class*='published'],time"),
-        "AI Summary":           ai_summary
+        # Placeholder for AI summary - will be generated in batch after filtering
+        "AI Summary":           None,
+        # Store raw data for AI summary generation
+        "_opp_data":            {
+            "Title": title,
+            "Donor Name": donor,
+            "Geographic Area": geo or ", ".join(mena_hits),
+            "Focus / Sector": sector,
+            "Eligibility": eligibility,
+            "Amount Max (USD)": amt_max,
+            "Application Deadline": deadline,
+        },
     }
 
 def run(max_pages=10, headless=False):
@@ -163,6 +168,14 @@ def run(max_pages=10, headless=False):
                 time.sleep(0.5)
 
         ctx.browser.close()
+
+    # Generate AI summaries in batch for all filtered results
+    print(f"\nGenerating AI summaries for {len(df)} opportunities...")
+    for idx, row in df.iterrows():
+        if row.get("_opp_data"):
+            df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
+    # Drop the temporary _opp_data column
+    df = df.drop(columns=["_opp_data"])
 
     print(f"\n{'='*50}\n  Done — {len(df)} matching rows\n{'='*50}\n")
     pd.set_option("display.max_columns", None)

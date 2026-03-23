@@ -198,18 +198,6 @@ def _scrape_opp(opp_url, driver):
         eligibility = parse_eligibility(body)
         sector = infer_sector(matched)
 
-        # Build opportunity dict for AI summary
-        opportunity = {
-            "Title": title,
-            "Donor Name": donor,
-            "Geographic Area": ", ".join(mena),
-            "Focus / Sector": sector,
-            "Eligibility": eligibility,
-            "Amount Max (USD)": str(amt_max) if amt_max else "",
-            "Application Deadline": deadline,
-        }
-        ai_summary = generate_sam_summary(opportunity)
-
         return {
             "Opportunity ID":       opp_id,
             "Opportunity Type":     opp_type,
@@ -225,7 +213,18 @@ def _scrape_opp(opp_url, driver):
             "Source Link":          opp_url,
             "Original Link":        external[0] if external else "",
             "Date Posted":          txt("[class*='posted-date'], [class*='postDate']"),
-            "AI Summary":           ai_summary,
+            # Placeholder for AI summary - will be generated in batch after filtering
+            "AI Summary":           None,
+            # Store raw data for AI summary generation
+            "_opp_data":            {
+                "Title": title,
+                "Donor Name": donor,
+                "Geographic Area": ", ".join(mena),
+                "Focus / Sector": sector,
+                "Eligibility": eligibility,
+                "Amount Max (USD)": str(amt_max) if amt_max else "",
+                "Application Deadline": deadline,
+            },
         }
     except Exception as exc:
         print(f"    Error on {opp_url}: {exc}")
@@ -268,6 +267,15 @@ def main():
         nav_driver.quit()
         for d in workers:
             d.quit()
+
+    # Generate AI summaries in batch for all filtered results
+    print(f"\nGenerating AI summaries for {len(df)} opportunities...")
+    for idx, row in df.iterrows():
+        if row.get("_opp_data"):
+            df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
+    # Drop the temporary _opp_data column
+    df = df.drop(columns=["_opp_data"])
+
     print(f"\nDone. Total opportunities: {len(df)}")
     print(df)
 
