@@ -6,7 +6,7 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
@@ -376,7 +376,7 @@ df = apply_filters(df)
 df = df[df["passes_all"] == True]
 
 #CONVERTING TO EXCEL SPREADSHEET
-wb = Workbook()
+'''wb = Workbook()
 ws = wb.active
 ws.title = "Tenders & Grants"
 
@@ -418,4 +418,71 @@ for col in ws.columns:
 ws.freeze_panes = "A2"
 
 wb.save("tenders_grants.xlsx")
-print("Saved to tenders_grants.xlsx")
+print("Saved to tenders_grants.xlsx")'''
+
+EXCEL_FILE = os.getenv("EXCEL_FILE")
+SHEET_NAME = "darpe"
+
+def _write_headers_and_data(ws, df):
+    headers = ["Title", "Type", "Donor Name", "Geographic Area", "Focus Sector",
+               "Deadline", "Source Link", "Original Link", "Attachments", "Amount (USD)", "Eligibility"]
+    ws.append(headers)
+
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
+        cell.fill = PatternFill("solid", start_color="2E4057")
+        cell.alignment = Alignment(horizontal="center")
+
+    for _, row in df.iterrows():
+        ws.append([
+            row["title"], row["type"], row["donor_name"], row["geographic_area"],
+            row["focus_sector"], row["deadline"], row["detail_page_url"],
+            row["original link"],
+            ", ".join(row["attachments"]) if row["attachments"] else "",
+            "", ""
+        ])
+
+def _apply_style(ws):
+    for col in ws.columns:
+        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 80)
+    ws.freeze_panes = "A2"
+
+def write_styled_sheet(df, excel_file, sheet_name):
+    if os.path.exists(excel_file):
+        wb = load_workbook(excel_file)
+        if sheet_name in wb.sheetnames:
+            # Sheet exists — dedup and append only new rows
+            existing_df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            existing_links = set(existing_df["Source Link"])
+            new_rows = df[~df["Source Link"].isin(existing_links)]
+            if new_rows.empty:
+                print("No new grants")
+                return
+            ws = wb[sheet_name]
+            for _, row in new_rows.iterrows():
+                ws.append([
+                    row["title"], row["type"], row["donor_name"], row["geographic_area"],
+                    row["focus_sector"], row["deadline"], row["detail_page_url"],
+                    row["original link"],
+                    ", ".join(row["attachments"]) if row["attachments"] else "",
+                    "", ""
+                ])
+            print(f"Added {len(new_rows)} new grants")
+        else:
+            # File exists, sheet doesn't
+            ws = wb.create_sheet(sheet_name)
+            _write_headers_and_data(ws, df)
+            print(f"Created new sheet '{sheet_name}'")
+    else:
+        # File doesn't exist
+        wb = Workbook()
+        ws = wb.active
+        ws.title = sheet_name
+        _write_headers_and_data(ws, df)
+        print("Created new Excel file")
+
+    _apply_style(wb[sheet_name])
+    wb.save(excel_file)
+
+write_styled_sheet(df, EXCEL_FILE, SHEET_NAME)

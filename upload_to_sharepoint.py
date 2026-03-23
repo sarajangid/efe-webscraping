@@ -2,9 +2,18 @@ import os
 import re
 import requests
 import shutil
+from dotenv import load_dotenv
 
+load_dotenv()
 
-def get_access_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET):
+TENANT_ID = os.environ["TENANT_ID"]
+CLIENT_ID = os.environ["CLIENT_ID"]
+CLIENT_SECRET = os.environ["CLIENT_SECRET"]
+SITE_ID = os.environ["SITE_ID"]
+EXCEL_FILE = os.environ["EXCEL_FILE"]
+ONEDRIVE_FOLDER = os.environ["ONEDRIVE_FOLDER"]
+
+def get_access_token():
 
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
 
@@ -30,12 +39,12 @@ def safe_name(name):
     return clean[:120]
 
 
-def download_documents(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
-
-    folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
-    os.makedirs(folder, exist_ok=True)
+def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
 
     for url in documents:
+
+        folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
+        os.makedirs(folder, exist_ok=True)
 
         if not url.startswith("http"):
             url = BASE_DOMAIN + url
@@ -78,21 +87,15 @@ def upload_to_onedrive(SITE_ID, TOKEN, local_path, remote_path):
 
     print("Uploaded:", remote_path)
 
-def run_storage_pipeline(
+def download_documents(
     rows,
     BASE_DOWNLOAD_DIR,
-    BASE_DOMAIN,
-    EXCEL_FILE,
-    ONEDRIVE_FOLDER,
-    TENANT_ID,
-    CLIENT_ID,
-    CLIENT_SECRET,
-    USER_ID
+    BASE_DOMAIN
 ):
 
     # 1. download documents
     for row in rows:
-        download_documents(
+        download_documents_helper(
             BASE_DOWNLOAD_DIR,
             BASE_DOMAIN,
             row["Grant Name"],
@@ -100,15 +103,15 @@ def run_storage_pipeline(
         )
 
     # 2. zip documents
-    zip_file = "Grants_docs.zip"
     shutil.make_archive("Grants_docs", "zip", BASE_DOWNLOAD_DIR)
 
+
+def process_uploads():
     # 3. get token
-    TOKEN = get_access_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
+    TOKEN = get_access_token()
 
     # 4. upload excel
     upload_to_onedrive(
-        USER_ID,
         TOKEN,
         EXCEL_FILE,
         f"{ONEDRIVE_FOLDER}/Grants.xlsx"
@@ -116,8 +119,7 @@ def run_storage_pipeline(
 
     # 5. upload zip
     upload_to_onedrive(
-        USER_ID,
         TOKEN,
-        zip_file,
+        "Grants_docs.zip",
         f"{ONEDRIVE_FOLDER}/Grants_docs.zip"
     )

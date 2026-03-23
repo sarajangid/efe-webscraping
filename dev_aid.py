@@ -3,6 +3,11 @@ import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 from reqs import *
 from summarizer import generate_sam_summary
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
 
 BASE_URL = "https://www.developmentaid.org/tenders/search?sort=relevance.desc&searchedText=grants"
 
@@ -169,6 +174,36 @@ def run(max_pages=10, headless=False):
     pd.set_option("display.max_colwidth", 60)
     pd.set_option("display.width", 220)
     print(df.to_string(index=False))
+
+    SHEET_NAME = "dev_aid"
+
+    if os.path.exists(EXCEL_FILE):
+        existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
+
+        if SHEET_NAME in existing_sheets:
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+            existing_links = set(existing_df["Original Link"])
+            new_rows = df[~df["Original Link"].isin(existing_links)]
+
+            if not new_rows.empty:
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                    startrow = writer.book[SHEET_NAME].max_row
+                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
+                print(f"Added {len(new_rows)} new grants")
+            else:
+                print("No new grants")
+
+        else:
+            # File exists but sheet doesn't — add new sheet without touching others
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+            print(f"Created new sheet '{SHEET_NAME}'")
+
+    else:
+        # File doesn't exist at all — create it
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+        print("Created new Excel file")
+
     return df
 
 if __name__ == "__main__":
