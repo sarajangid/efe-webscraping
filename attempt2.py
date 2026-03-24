@@ -455,7 +455,7 @@ def write_styled_sheet(df, excel_file, sheet_name):
             # Sheet exists — dedup and append only new rows
             existing_df = pd.read_excel(excel_file, sheet_name=sheet_name)
             existing_links = set(existing_df["Source Link"])
-            new_rows = df[~df["Source Link"].isin(existing_links)]
+            new_rows = df[~df["detail_page_url"].isin(existing_links)]
             if new_rows.empty:
                 print("No new grants")
                 return
