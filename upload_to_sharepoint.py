@@ -90,7 +90,9 @@ def upload_to_onedrive(SITE_ID, TOKEN, local_path, remote_path):
 def download_documents(
     rows,
     BASE_DOWNLOAD_DIR,
-    BASE_DOMAIN
+    BASE_DOMAIN,
+    grant_name_col,
+    docs_arr_col
 ):
 
     # 1. download documents
@@ -98,15 +100,20 @@ def download_documents(
         download_documents_helper(
             BASE_DOWNLOAD_DIR,
             BASE_DOMAIN,
-            row["Grant Name"],
-            row["Documents"]
+            row[grant_name_col],
+            row[docs_arr_col]
         )
 
-    # 2. zip documents
-    shutil.make_archive("Grants_docs", "zip", BASE_DOWNLOAD_DIR)
+
 
 
 def process_uploads():
+
+    DIR = os.environ["BASE_DOWNLOAD_DIR"]
+
+    # 2. zip documents
+    shutil.make_archive("Grants_docs", "zip", DIR)
+
     # 3. get token
     TOKEN = get_access_token()
 

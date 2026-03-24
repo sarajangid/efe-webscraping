@@ -361,5 +361,7 @@ else:
 download_documents(
     rows=rows,
     BASE_DOWNLOAD_DIR=os.path.join(BASE_DOWNLOAD_DIR,SHEET_NAME),
-    BASE_DOMAIN=BASE_DOMAIN
+    BASE_DOMAIN=BASE_DOMAIN,
+    grant_name_col="Grant Name",
+    docs_arr_col="Documents"
 )
