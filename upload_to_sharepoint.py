@@ -3,6 +3,9 @@ import re
 import requests
 import shutil
 from dotenv import load_dotenv
+from PIL import Image
+from io import BytesIO
+import fitz  # PyMuPDF
 
 load_dotenv()
 
@@ -39,7 +42,7 @@ def safe_name(name):
     return clean[:120]
 
 
-def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
+'''def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
 
     for url in documents:
 
@@ -63,6 +66,75 @@ def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, docume
                     f.write(chunk)
 
             print("Downloaded:", filename)
+
+        except Exception as e:
+            print("Download error:", e)'''
+
+def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
+
+    for url in documents:
+
+        folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
+        os.makedirs(folder, exist_ok=True)
+
+        if not url.startswith("http"):
+            url = BASE_DOMAIN + url
+
+        original_filename = url.split("/")[-1]
+        stem = os.path.splitext(original_filename)[0]
+        pdf_filename = stem + ".pdf"
+        filepath = os.path.join(folder, pdf_filename)
+
+        if os.path.exists(filepath):
+            continue
+
+        try:
+            r = requests.get(url, stream=True)
+            r.raise_for_status()
+
+            content_type = r.headers.get("Content-Type", "")
+            raw = r.content
+
+            # Already a PDF
+            if "pdf" in content_type or original_filename.lower().endswith(".pdf"):
+                with open(filepath, "wb") as f:
+                    f.write(raw)
+
+            # Image → PDF
+            elif "image" in content_type or original_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff")):
+                img = Image.open(BytesIO(raw)).convert("RGB")
+                img.save(filepath, "PDF")
+
+            # HTML / text → PDF via PyMuPDF
+            elif "html" in content_type or original_filename.lower().endswith((".html", ".htm")):
+                doc = fitz.open()
+                page = doc.new_page()
+                page.insert_text((72, 72), raw.decode("utf-8", errors="replace"), fontsize=10)
+                doc.save(filepath)
+                doc.close()
+
+            # Word documents → PDF via LibreOffice (if available)
+            elif original_filename.lower().endswith((".doc", ".docx")):
+                tmp_path = os.path.join(folder, original_filename)
+                with open(tmp_path, "wb") as f:
+                    f.write(raw)
+                os.system(f'libreoffice --headless --convert-to pdf "{tmp_path}" --outdir "{folder}"')
+                if os.path.exists(filepath):
+                    os.remove(tmp_path)
+
+            # Fallback: wrap raw bytes in a PDF as plain text
+            else:
+                doc = fitz.open()
+                page = doc.new_page()
+                try:
+                    text = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    text = f"[Binary content from: {url}]"
+                page.insert_text((72, 72), text, fontsize=10)
+                doc.save(filepath)
+                doc.close()
+
+            print("Downloaded as PDF:", pdf_filename)
 
         except Exception as e:
             print("Download error:", e)
