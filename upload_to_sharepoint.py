@@ -140,7 +140,7 @@ def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, docume
             print("Download error:", e)
 
 
-def upload_to_onedrive(SITE_ID, TOKEN, local_path, remote_path):
+def upload_to_onedrive(TOKEN, local_path, remote_path):
 
     url = f"https://graph.microsoft.com/v1.0/sites/{SITE_ID}/drive/root:/{remote_path}:/content"
 
@@ -193,12 +193,12 @@ def process_uploads():
     upload_to_onedrive(
         TOKEN,
         EXCEL_FILE,
-        f"{ONEDRIVE_FOLDER}/Grants.xlsx"
+        f"{ONEDRIVE_FOLDER}/Grants.xlsx",
     )
 
     # 5. upload zip
     upload_to_onedrive(
         TOKEN,
         "Grants_docs.zip",
-        f"{ONEDRIVE_FOLDER}/Grants_docs.zip"
+        f"{ONEDRIVE_FOLDER}/Grants_docs.zip",
     )

@@ -57,7 +57,7 @@ wait = WebDriverWait(driver, 10)
 rows = []
 links = []
 
-'''while True:
+while True:
 
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
 
@@ -94,9 +94,9 @@ links = []
         print("No more pages")
         break
 
-driver.quit()'''
+driver.quit()
 
-wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
+'''wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
 
 soup = BeautifulSoup(driver.page_source, "html.parser")
 results = soup.select("tr.border-base")
@@ -114,7 +114,7 @@ for result in results:
 
 print(f"Collected {len(links)} links from first page")
 
-driver.quit()
+driver.quit()'''
 
 
 ############################

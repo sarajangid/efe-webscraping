@@ -38,6 +38,7 @@ def generate_summary(grant: dict) -> str:
         prompt += f"\nAdditional context:\n{description}"
 
     for attempt in range(3):
+        print("Starting Attempt ", attempt)
         try:
             response = client.models.generate_content(
                 model="gemini-2.5-flash",

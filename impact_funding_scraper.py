@@ -15,6 +15,13 @@ from bs4 import BeautifulSoup
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from summarizer import generate_summary
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+OUTPUT_FILE = os.getenv("EXCEL_FILE")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -28,7 +35,7 @@ ARCHIVE_URLS = [
     "https://impactfunding.substack.com/s/innovation-research-and-smart-cities/archive?sort=new",
 ]
 
-OUTPUT_FILE = "efe_mena_education_grants.xlsx"
+#OUTPUT_FILE = "efe_mena_education_grants.xlsx"
 
 MENA_KEYWORDS = [
     "morocco", "algeria", "tunisia", "egypt", "jordan",
@@ -387,9 +394,21 @@ GRANT_KEYS = [
 HEADER_COLOR = "1F4E79"
 
 def save_to_excel(grants, path=OUTPUT_FILE):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "MENA Education Grants"
+    #wb = openpyxl.Workbook()
+    #ws = wb.active
+    #ws.title = "MENA Education Grants"
+    #ws.title = "impact funding"
+
+    if os.path.exists(path):
+        wb = openpyxl.load_workbook(path)   # <-- load existing file
+    else:
+        wb = openpyxl.Workbook()            # create new if it doesn't exist
+
+    # Create or replace your sheet
+    sheet_name = "impact funding"
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]                  # optional: overwrite sheet
+    ws = wb.create_sheet(title=sheet_name)
 
     header_fill = PatternFill(start_color=HEADER_COLOR, end_color=HEADER_COLOR, fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
@@ -445,6 +464,7 @@ def main():
 
     print(f"\n[3/4] Generating AI summaries for {len(all_grants)} grant(s)...")
     for i, grant in enumerate(all_grants):
+        #grant["summary"] = "test"
         grant["summary"] = generate_summary(grant)
         print(f"    [{i+1}/{len(all_grants)}] summarized")
 
