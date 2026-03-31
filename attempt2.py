@@ -1,6 +1,4 @@
 import re
-# import urllib3
-# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import time
 import requests
 import pandas as pd
@@ -10,17 +8,12 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
-from impact_funding_scraper import generate_summary
+from summarizer import generate_darpe_summary
 
 load_dotenv()
 
 # 1. Start a session
 session = requests.Session()
-
-# # Optional: Add headers so you look like a real browser
-# session.headers.update({
-#     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-# })
 
 login_url = "https://darpe.me/darpe-login.php" # The URL the form submits to
 target_url = "https://darpe.me/tenders-and-grants/" # The page you actually want to scrape
@@ -32,12 +25,6 @@ password = os.getenv("PASSWORD")
 
 
 # 2. Create your payload using the exact field names the site expects
-# login_data = {
-#     user_field_name: username,
-#     pass_field_name: password,
-    # Sometimes you need a hidden token here too, like an anti-CSRF token
-# }
-
 login_data = {
     "log": username,
     "pwd": password,
@@ -50,20 +37,10 @@ login_data = {
 print("Logging in...")
 login_response = session.post(login_url, data=login_data)
 
-# print(login_response.url)   
-# # Optional: Check if login was successful by looking for a specific word in the response
-# if "Sign Out" in login_response.text:
-#     print("Login successful!")
-# else:
-#     print("Login might have failed. Check credentials or hidden tokens.")
-
 detail_response = session.get(target_url)
 
 # 5. Parse the protected HTML
 soup = BeautifulSoup(detail_response.text, "html.parser")
-
-# # Now you can search for your target elements!
-# target_div = soup.select("div.gray_bg") 
 
 BASE_URL = "https://darpe.me"
 LISTING_URL = "https://darpe.me/tenders-and-grants/"  # replace with actual listing URL
@@ -137,28 +114,6 @@ def extract_listing_rows(html):
             info_soup = BeautifulSoup(res.text, "html.parser")
         except Exception as e:
             print(f"Error crawling {detail_page_url}: {e}")
-        # if info_soup:
-        #     res = requests.get(detail_page_url, headers=HEADERS)
-        #     res.raise_for_status()
-
-            # info_soup = BeautifulSoup(res.text, "html.parser")
-
-            page_title = info_soup.title.get_text(strip=True) if info_soup.title else "No Title"
-            # print(f"Landed on page: {page_title}")
-
-            info_table = info_soup.select("div.gray-bg")
-            # if not info_table:
-            #     print(f"--> Warning: 'div.gray-bg' not found on {detail_page_url}")
-            # else:
-            #     print(f"--> Success! Found target div.")
-            #     print(info_table)
-            
-            # lis = info_table[0].find_all("li")
-            # if not lis:
-            #     continue
-            # print(lis)
-        # except Exception as e:
-        #     print(f"Error crawling {detail_page_url}: {e}")
         
         # 6) attachments
         attachment_urls = []
@@ -188,7 +143,8 @@ def extract_listing_rows(html):
             "focus_sector": focus_sector,
             "geographic_area": geographic_area,
             "attachments": attachment_urls,
-            "original link": og_link
+            "original link": og_link,
+            "ai_summary": ""
         })
 
     return results
@@ -341,10 +297,10 @@ def get_total_pages():
     
     return max(page_numbers) if page_numbers else 1
 total_pages = get_total_pages()
-# print("total:", total_pages)
+
 #RUNS THE ACTUAL CODE:
 
-MAX_PAGES = 5 # ← change this to however many pages you want
+MAX_PAGES = 1 # ← change this to however many pages you want
 
 all_items = []
 
@@ -382,7 +338,7 @@ ws.title = "Tenders & Grants"
 
 # Header row
 headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
-           "Amount (USD)", "Eligibility"]
+           "AI Summary", "Amount (USD)", "Eligibility"]
 ws.append(headers)
 
 # Style header row
@@ -390,6 +346,20 @@ for cell in ws[1]:
     cell.font = Font(bold=True, color="FFFFFF", name="Arial")
     cell.fill = PatternFill("solid", start_color="2E4057")
     cell.alignment = Alignment(horizontal="center")
+
+# Generating AI Summaries
+for i, row in df.iterrows():
+    text_for_ai = " ".join([
+        row["title"],
+        row["focus_sector"],
+        row["geographic_area"]
+    ])
+
+    summary = generate_darpe_summary(text_for_ai)
+
+    df.at[i, "ai_summary"] = summary
+
+    time.sleep(12) # prevents Gemini rate limit
 
 # Data rows
 for _, row in df.iterrows():
@@ -403,6 +373,7 @@ for _, row in df.iterrows():
         row["detail_page_url"],
         row["original link"],
         ", ".join(row["attachments"]) if row["attachments"] else "",
+        row["ai_summary"],
         "",  # Amount USD (cannot find so filler for now)
         ""   # Eligibility (cannot find so filler for now)
     ])
