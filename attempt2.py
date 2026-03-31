@@ -396,7 +396,7 @@ SHEET_NAME = "darpe"
 
 def _write_headers_and_data(ws, df):
     headers = ["Title", "Type", "Donor Name", "Geographic Area", "Focus Sector",
-               "Deadline", "Source Link", "Original Link", "Attachments", "Amount (USD)", "Eligibility"]
+               "Deadline", "Source Link", "Original Link", "Attachments", "AI Summary", "Amount (USD)", "Eligibility"]
     ws.append(headers)
 
     for cell in ws[1]:
@@ -404,12 +404,26 @@ def _write_headers_and_data(ws, df):
         cell.fill = PatternFill("solid", start_color="2E4057")
         cell.alignment = Alignment(horizontal="center")
 
+    for i, row in df.iterrows():
+        text_for_ai = " ".join([
+            row["title"],
+            row["focus_sector"],
+            row["geographic_area"]
+        ])
+
+        summary = generate_darpe_summary(text_for_ai)
+
+        df.at[i, "ai_summary"] = summary
+
+        time.sleep(12) # prevents Gemini rate limit
+
     for _, row in df.iterrows():
         ws.append([
             row["title"], row["type"], row["donor_name"], row["geographic_area"],
             row["focus_sector"], row["deadline"], row["detail_page_url"],
             row["original link"],
             ", ".join(row["attachments"]) if row["attachments"] else "",
+            row["ai_summary"],
             "", ""
         ])
 
@@ -437,6 +451,7 @@ def write_styled_sheet(df, excel_file, sheet_name):
                     row["focus_sector"], row["deadline"], row["detail_page_url"],
                     row["original link"],
                     ", ".join(row["attachments"]) if row["attachments"] else "",
+                    row["ai_summary"],
                     "", ""
                 ])
             print(f"Added {len(new_rows)} new grants")
