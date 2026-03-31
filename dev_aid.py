@@ -3,6 +3,11 @@ import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 from reqs import *
 from summarizer import generate_sam_summary
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
 
 BASE_URL = "https://www.developmentaid.org/tenders/search?sort=relevance.desc&searchedText=grants"
 
@@ -75,20 +80,9 @@ def scrape_detail(page, href, source_url):
 
     title = get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A"
     donor = get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']")
+    sector = get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']")
     eligibility = get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']")
     deadline = get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]")
-
-    # Build opportunity dict for AI summary
-    opportunity = {
-        "Title": title,
-        "Donor Name": donor,
-        "Geographic Area": geo or ", ".join(mena_hits),
-        "Focus / Sector": get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']"),
-        "Eligibility": eligibility,
-        "Amount Max (USD)": amt_max,
-        "Application Deadline": deadline,
-    }
-    ai_summary = generate_sam_summary(opportunity)
 
     return {
         "Opportunity ID":       opp_id,
@@ -96,7 +90,7 @@ def scrape_detail(page, href, source_url):
         "Title":                title,
         "Donor Name":           donor,
         "Geographic Area":      geo or ", ".join(mena_hits),
-        "Focus / Sector":       get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']"),
+        "Focus / Sector":       sector,
         "Application Deadline": deadline,
         "Amount Min (USD)":     amt_min,
         "Amount Max (USD)":     amt_max,
@@ -105,7 +99,18 @@ def scrape_detail(page, href, source_url):
         "Source Link":          source_url,
         "Original Link":        href,
         "Date Posted":          get(page, "[class*='posted'],[class*='Published'],[class*='published'],time"),
-        "AI Summary":           ai_summary,
+        # Placeholder for AI summary - will be generated in batch after filtering
+        "AI Summary":           None,
+        # Store raw data for AI summary generation
+        "_opp_data":            {
+            "Title": title,
+            "Donor Name": donor,
+            "Geographic Area": geo or ", ".join(mena_hits),
+            "Focus / Sector": sector,
+            "Eligibility": eligibility,
+            "Amount Max (USD)": amt_max,
+            "Application Deadline": deadline,
+        },
     }
 
 def run(max_pages=10, headless=False):
@@ -164,11 +169,49 @@ def run(max_pages=10, headless=False):
 
         ctx.browser.close()
 
+    # Generate AI summaries in batch for all filtered results
+    print(f"\nGenerating AI summaries for {len(df)} opportunities...")
+    for idx, row in df.iterrows():
+        if row.get("_opp_data"):
+            df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
+    # Drop the temporary _opp_data column
+    df = df.drop(columns=["_opp_data"])
+
     print(f"\n{'='*50}\n  Done — {len(df)} matching rows\n{'='*50}\n")
     pd.set_option("display.max_columns", None)
     pd.set_option("display.max_colwidth", 60)
     pd.set_option("display.width", 220)
     print(df.to_string(index=False))
+
+    SHEET_NAME = "dev_aid"
+
+    if os.path.exists(EXCEL_FILE):
+        existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
+
+        if SHEET_NAME in existing_sheets:
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+            existing_links = set(existing_df["Original Link"])
+            new_rows = df[~df["Original Link"].isin(existing_links)]
+
+            if not new_rows.empty:
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                    startrow = writer.book[SHEET_NAME].max_row
+                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
+                print(f"Added {len(new_rows)} new grants")
+            else:
+                print("No new grants")
+
+        else:
+            # File exists but sheet doesn't — add new sheet without touching others
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+            print(f"Created new sheet '{SHEET_NAME}'")
+
+    else:
+        # File doesn't exist at all — create it
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+        print("Created new Excel file")
+
     return df
 
 if __name__ == "__main__":

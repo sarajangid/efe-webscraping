@@ -1,52 +1,31 @@
-import re, urllib.parse
-from datetime import datetime
+import re, time, urllib.parse
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
+from openpyxl.descriptors.serialisable import KEYWORDS
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
+from summarizer import generate_sam_summary
+from reqs import MENA_COUNTRIES, KEYWORDS, COLUMNS
 
 MAX_PAGES = 10
 MAX_WORKERS = 10  # number of reusable drivers in the pool
-MENA_COUNTRIES = [
-    "Morocco", "Algeria", "Tunisia", "Egypt", "Jordan",
-    "Palestine", "Palestinian", "West Bank", "Gaza", "Yemen",
-    "UAE", "United Arab Emirates", "Saudi Arabia", "Lebanon",
-    "Bahrain", "Syria", "MENA", "Middle East", "North Africa",
-    "Arab World", "GCC", "Maghreb", "Levant",
-]
+
 _MENA_RE = re.compile(
     r"\b(" + "|".join(re.escape(c) for c in MENA_COUNTRIES) + r")\b",
     re.IGNORECASE,
 )
-KEYWORDS = [
-    "youth employment", "workforce development", "employability", "job placement",
-    "job creation", "livelihoods", "economic empowerment", "economic inclusion",
-    "apprenticeship", "internship", "mentorship", "job readiness", "job search",
-    "labor market activation", "economic participation", "labor market entry",
-    "NEET", "work readiness", "job seekers", "early-career", "reducing inequalities",
-    "skills development", "vocational training", "technical training", "soft skills",
-    "digital skills", "green jobs", "green skills", "TVET", "upskilling", "reskilling",
-    "employability skills", "curriculum development", "financial literacy",
-    "circular economy", "life skills", "entrepreneurial skills", "blended training",
-    "entrepreneurship", "SME development", "private sector development",
-    "self employment", "income generation", "startup incubation", "employer engagement",
-    "business acceleration", "micro entrepreneurship", "SME", "green entrepreneurship",
-    "women entrepreneurship", "startup support", "financial inclusion", "MSME",
-    "microbusiness", "freelance", "gig economy", "capacity building",
-    "systems strengthening", "competitiveness", "skills gaps", "business association",
-    "chamber of commerce", "industry federation",
-]
-COLUMNS = [
-    "Opportunity ID", "Opportunity Type", "Title", "Donor Name", "Geographic Area",
-    "Focus / Sector", "Application Deadline", "Amount Min (USD)", "Amount Max (USD)",
-    "Eligibility", "Matched Keywords", "Source Link", "Original Link",
-    "Date Posted", "Date Scraped",
-]
+
+
 SECTOR_MAP = {
     "Youth Workforce Development": {
         "youth employment", "job placement", "job readiness", "neet", "work readiness",
@@ -210,22 +189,42 @@ def _scrape_opp(opp_url, driver):
                 if href and "sam.gov" not in href: external.append(href)
             except StaleElementReferenceException:
                 continue
+
+        # Extract fields for AI summary
+        title = txt("h1, [class*='opportunity-title'], [class*='opp-title']")
+        donor = txt("[class*='organization'], [class*='agency-name'], [class*='dept']")
+        deadline = txt("[class*='deadline'], [class*='response-date'], [class*='responseDeadline'], .response-deadline")
+        amt_max = parse_amount(txt("[class*='award-amount'], [class*='amount']"))
+        eligibility = parse_eligibility(body)
+        sector = infer_sector(matched)
+
         return {
             "Opportunity ID":       opp_id,
             "Opportunity Type":     opp_type,
-            "Title":                txt("h1, [class*='opportunity-title'], [class*='opp-title']"),
-            "Donor Name":           txt("[class*='organization'], [class*='agency-name'], [class*='dept']"),
+            "Title":                title,
+            "Donor Name":           donor,
             "Geographic Area":      ", ".join(mena),
-            "Focus / Sector":       infer_sector(matched),
-            "Application Deadline": txt("[class*='deadline'], [class*='response-date'], [class*='responseDeadline'], .response-deadline"),
+            "Focus / Sector":       sector,
+            "Application Deadline": deadline,
             "Amount Min (USD)":     "",
-            "Amount Max (USD)":     parse_amount(txt("[class*='award-amount'], [class*='amount']")),
-            "Eligibility":          parse_eligibility(body),
+            "Amount Max (USD)":     str(amt_max) if amt_max else "",
+            "Eligibility":          eligibility,
             "Matched Keywords":     " | ".join(matched),
             "Source Link":          opp_url,
             "Original Link":        external[0] if external else "",
             "Date Posted":          txt("[class*='posted-date'], [class*='postDate']"),
-            "Date Scraped":         datetime.now().strftime("%Y-%m-%d"),
+            # Placeholder for AI summary - will be generated in batch after filtering
+            "AI Summary":           None,
+            # Store raw data for AI summary generation
+            "_opp_data":            {
+                "Title": title,
+                "Donor Name": donor,
+                "Geographic Area": ", ".join(mena),
+                "Focus / Sector": sector,
+                "Eligibility": eligibility,
+                "Amount Max (USD)": str(amt_max) if amt_max else "",
+                "Application Deadline": deadline,
+            },
         }
     except Exception as exc:
         print(f"    Error on {opp_url}: {exc}")
@@ -268,8 +267,47 @@ def main():
         nav_driver.quit()
         for d in workers:
             d.quit()
+
+    # Generate AI summaries in batch for all filtered results
+    print(f"\nGenerating AI summaries for {len(df)} opportunities...")
+    for idx, row in df.iterrows():
+        if row.get("_opp_data"):
+            df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
+    # Drop the temporary _opp_data column
+    df = df.drop(columns=["_opp_data"])
+
     print(f"\nDone. Total opportunities: {len(df)}")
     print(df)
+
+    SHEET_NAME = "sam"
+
+    if os.path.exists(EXCEL_FILE):
+        existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
+
+        if SHEET_NAME in existing_sheets:
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+            existing_links = set(existing_df["Opportunity ID"])
+            new_rows = df[~df["Opportunity ID"].isin(existing_links)]
+
+            if not new_rows.empty:
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                    startrow = writer.book[SHEET_NAME].max_row
+                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
+                print(f"Added {len(new_rows)} new grants")
+            else:
+                print("No new grants")
+
+        else:
+            # File exists but sheet doesn't — add new sheet without touching others
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+            print(f"Created new sheet '{SHEET_NAME}'")
+
+    else:
+        # File doesn't exist at all — create it
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+        print("Created new Excel file")
+
     return df
 
 if __name__ == "__main__":
