@@ -3,7 +3,7 @@ import re
 import requests
 import shutil
 from dotenv import load_dotenv
-from PIL import Image
+#from PIL import Image
 from io import BytesIO
 import fitz  # PyMuPDF
 
@@ -102,8 +102,13 @@ def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, docume
 
             # Image → PDF
             elif "image" in content_type or original_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff")):
-                img = Image.open(BytesIO(raw)).convert("RGB")
-                img.save(filepath, "PDF")
+                #img = Image.open(BytesIO(raw)).convert("RGB")
+                #img.save(filepath, "PDF")
+                img_doc = fitz.open(stream=raw, filetype="image")
+                pdf_bytes = img_doc.convert_to_pdf()
+                img_doc.close()
+                with open(filepath, "wb") as f:
+                    f.write(pdf_bytes)
 
             # HTML / text → PDF via PyMuPDF
             elif "html" in content_type or original_filename.lower().endswith((".html", ".htm")):
