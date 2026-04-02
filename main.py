@@ -2,7 +2,7 @@ import subprocess
 
 from upload_to_sharepoint import process_uploads
 
-scrapers = ["attempt2.py", "scraper.py", "impact_funding_scraper.py", "dev_aid.py", "eu_comm.py", "fundsforngos_webscraper.py", "sam.py"] # change to test later
+scrapers = ["attempt2.py", "scraper.py", "impact_funding_scraper.py", "dev_aid.py", "eu_comm.py", "fundsforngos_webscraper.py", "sam_fast.py"] # change to test later
 
 try:
     for scraper in scrapers:
