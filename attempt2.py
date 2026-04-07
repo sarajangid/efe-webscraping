@@ -21,7 +21,7 @@ target_url = "https://darpe.me/tenders-and-grants/" # The page you actually want
 
 user_field_name = os.getenv("USER_FIELD_NAME")
 username = os.getenv("USER_NAME")
-pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
+# pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
 password = os.getenv("PASSWORD")
 
 
