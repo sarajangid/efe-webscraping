@@ -1,13 +1,12 @@
 from summarizer import generate_sam_summary
 import asyncio
 import pandas as pd
-import re  # ✅ FIX: Added missing import
+import re
+import time
 from urllib.parse import urljoin
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 import os
 from dotenv import load_dotenv
-from ai_summary import generate_sam_summary
-
 
 BASE_URL = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/calls-for-proposals"
 
@@ -28,13 +27,14 @@ KEYWORDS = [
     "labor market activation","economic participation","labor market entry",
     "NEET","work readiness","job seekers","early-career","reducing inequalities",
     "skills development","vocational training","technical training","soft skills",
-    "digital skills","green jobs","green skills","TVET","upskilling","reskilling",
+    "digital skills","green jobs","green skills","TVET","upskilling","resciling",
     "entrepreneurship","SME development","financial inclusion","gig economy",
 ]
 
+# ✅ UPDATED: Added "AI Summary" and "Full_Description" (temp storage)
 COLUMNS = [
     "Opportunity ID","Title","Application Deadline","Matched Keywords",
-    "Geographic Area","Original Link"
+    "Geographic Area","Original Link", "Full_Description", "AI Summary"
 ]
 
 def contains_mena(text):
@@ -81,7 +81,7 @@ async def scrape():
                     card = cards.nth(i)
                     
                     if not await card.is_visible(timeout=5000):
-                        print(f"⚠️ Card {i+1} no longer visible, skipping")
+                        print(f"️ Card {i+1} no longer visible, skipping")
                         continue
                         
                     text = await card.inner_text(timeout=10000)
@@ -110,6 +110,7 @@ async def scrape():
                         await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
                         continue
 
+                    # ✅ CAPTURE FULL TEXT FOR SUMMARIZER LATER
                     content = await page.inner_text("body", timeout=10000)
 
                     mena_matches = contains_mena(content)
@@ -130,7 +131,7 @@ async def scrape():
                     else:
                         print(f"✅ Keywords: {keyword_matches}")
 
-                    print("🎯 ACCEPTED")
+                    print(" ACCEPTED")
 
                     # ✅ FIX: re module now available for regex
                     deadline = ""
@@ -138,13 +139,16 @@ async def scrape():
                     if deadline_match:
                         deadline = deadline_match.group(1).strip()
 
+                    # ✅ ADDED: Store full description for later summarization
                     rows.append({
                         "Opportunity ID": "",
                         "Title": text.split("\n")[0].strip(),
                         "Application Deadline": deadline,
                         "Matched Keywords": ", ".join(keyword_matches),
                         "Geographic Area": ", ".join(mena_matches),
-                        "Original Link": full_link
+                        "Original Link": full_link,
+                        "Full_Description": content, # Saved here for AI
+                        "AI Summary": "" # Placeholder
                     })
 
                     await page.go_back(wait_until="domcontentloaded", timeout=15000)
@@ -178,26 +182,70 @@ async def scrape():
 
         await browser.close()
     
+    if rows:
+        print(f"\n🤖 Starting AI Summarization for {len(rows)} opportunities...")
+        
+        for idx, row in enumerate(rows):
+            print(f"   Processing {idx+1}/{len(rows)}: {row['Title'][:40]}...")
+            
+            # Prepare data structure expected by generate_sam_summary
+            # We map your EU columns to the keys the function expects
+            opp_data = {
+                "Title": row.get("Title", ""),
+                "Donor Name": "European Commission",
+                "Geographic Area": row.get("Geographic Area", ""),
+                "Focus / Sector": "", 
+                "Eligibility": "",
+                "Amount Max (USD)": "",
+                "Application Deadline": row.get("Application Deadline", ""),
+                "body": row.get("Full_Description", "") # Pass the full scraped text
+            }
+
+            try:
+                summary = generate_sam_summary(opp_data)
+                row["AI Summary"] = summary
+            except Exception as e:
+                print(f"      ❌ Error generating summary: {e}")
+                row["AI Summary"] = "Error generating summary."
+            
+            #  RATE LIMIT PROTECTION: Pause between calls
+            time.sleep(1.5) 
+
+        print("✅ All summaries generated.\n")
+
     SHEET_NAME = "eu_comm"
     if rows:
         df = pd.DataFrame(rows, columns=COLUMNS)
         print(f"\n✅ Done. Saved {len(rows)} opportunities")
+        
+        # Drop the temporary Full_Description column before saving to Excel 
+        # (Optional: Remove this line if you want the full text in Excel too)
+        if "Full_Description" in df.columns:
+            df = df.drop(columns=["Full_Description"])
+            # Ensure COLUMNS matches for the final save logic if needed, 
+            # but passing the DF directly is safer.
+            final_columns = [c for c in COLUMNS if c != "Full_Description"]
+            df = df[final_columns]
+
         if os.path.exists(EXCEL_FILE):
             if SHEET_NAME in pd.ExcelFile(EXCEL_FILE).sheet_names:
-                new_rows = df[~df["Opportunity ID"].isin(set(pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)["Opportunity ID"]))]
-                if not new_rows.empty:
-                    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                        new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=writer.book[SHEET_NAME].max_row, index=False, header=False)
-                    print(f"Added {len(new_rows)} new grants")
-                else: 
-                    print("No new grants")
+                existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+                # Simple deduplication based on Title + Link (since ID is empty)
+                combined = pd.concat([existing_df, df], ignore_index=True)
+                combined = combined.drop_duplicates(subset=["Original Link"], keep="last")
+                
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="w") as writer:
+                    combined.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+                print(f"Merged and saved. Total rows: {len(combined)}")
             else:
-                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer: df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer: 
+                    df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
                 print(f"Created new sheet '{SHEET_NAME}'")
         else:
-            df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False); print("Created new Excel file")
+            df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+            print("Created new Excel file")
 
-            return df
+        return df
     else:
         print("\n⚠️ No data collected. Check filters or website structure.")
         return pd.DataFrame(columns=COLUMNS)
