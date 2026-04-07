@@ -12,6 +12,8 @@ import pandas as pd
 import time
 import re
 import logging
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 from summarizer import generate_simpler_summary
 
 logging.basicConfig(
@@ -101,7 +103,7 @@ def is_grant_link(url, base_url):
     """
     Return True if the URL looks like an individual grant page on the same site.
     - Same host as the listing page
-    - Path has at least two segments: /category/slug/
+    - Path has at least one non-empty segment
     - Not a listing/navigation URL
     """
     from urllib.parse import urlparse
@@ -111,9 +113,8 @@ def is_grant_link(url, base_url):
         if listing_host != grant_host:
             return False
         path = urlparse(url).path
-        # Must have at least /segment/slug structure
         parts = [p for p in path.strip('/').split('/') if p]
-        if len(parts) < 2:
+        if len(parts) < 1:
             return False
         if any(seg in url for seg in LISTING_PATH_SEGMENTS):
             return False
@@ -206,6 +207,8 @@ def first_regex_match(text, patterns):
 
 
 
+
+
 def extract_grant_info(grant_url, source_url, session):
     """
     Visit a grant page and return a dict of structured fields.
@@ -256,18 +259,6 @@ def extract_grant_info(grant_url, source_url, session):
         r'[Dd]ue\s+[Dd]ate[:\-\s]+([^\n]+)',
     ])
 
-    # ── Geographic location ────────────────────────────────────────────────
-    location = first_regex_match(full_text, [
-        r'[Ee]ligible\s+[Cc]ountries[:\-\s]+([^\n]+)',
-        r'[Cc]ountries?\s+[Ee]ligible[:\-\s]+([^\n]+)',
-        r'[Gg]eographic\s+(?:[Ff]ocus|[Ee]ligibility|[Ss]cope)[:\-\s]+([^\n]+)',
-        r'[Oo]pen\s+[Tt]o[:\-\s]+([^\n]+)',
-        r'[Ww]ho\s+[Cc]an\s+[Aa]pply[:\-\s]+([^\n]+)',
-        r'[Cc]ountries?\s+of\s+[Ee]ligibility[:\-\s]+([^\n]+)',
-        r'[Nn]ationality\s+[Rr]equirements?[:\-\s]+([^\n]+)',
-        r'[Ll]ocation[:\-\s]+([^\n]+)',
-    ])
-
     # ── Donor name & application link ──────────────────────────────────────
     # Pages consistently end with "For more information, visit [Org Name]"
     # where the anchor text is the donor and the href is the application site.
@@ -299,8 +290,8 @@ def extract_grant_info(grant_url, source_url, session):
                     break
 
     # ── Geographic filter ──────────────────────────────────────────────────
-    # Grants from the Lebanon tag are pre-filtered; all others must mention
-    # at least one target country somewhere on the page.
+    # Grants from the Lebanon tag are pre-filtered by the site editors.
+    # All others must mention at least one target country in their page text.
     if source_url != LEBANON_TAG_URL and not contains_target_country(full_text):
         return None
 
@@ -308,9 +299,7 @@ def extract_grant_info(grant_url, source_url, session):
         'title': title,
         'summary': summary,
         'donor': donor,
-        'geographic_location': location,
         'deadline': deadline,
-        'view_grant': 'view grant link',
         'application_link': app_link,
         'grant_page_url': grant_url,
         'source_listing_url': source_url,
@@ -353,13 +342,33 @@ def main():
 
     df = pd.DataFrame(all_grants)
 
-    with pd.ExcelWriter('grants.xlsx', engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Grants')
-        ws = writer.sheets['Grants']
-        # Auto-fit column widths
-        for col in ws.columns:
-            max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
-            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 80)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Grants'
+
+    headers = list(df.columns)
+    ws.append(headers)
+
+    # Style header row
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color='FFFFFF', name='Arial')
+        cell.fill = PatternFill('solid', start_color='2E4057')
+        cell.alignment = Alignment(horizontal='center', wrap_text=True)
+
+    # Data rows with wrap_text
+    for _, row in df.iterrows():
+        ws.append(list(row))
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical='top')
+
+    # Auto-fit column widths
+    for col in ws.columns:
+        max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 80)
+
+    ws.freeze_panes = 'A2'
+    wb.save('grants.xlsx')
     logger.info(f"Saved {len(df)} grants → grants.xlsx")
 
 
