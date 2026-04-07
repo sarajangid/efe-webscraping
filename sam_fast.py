@@ -37,7 +37,9 @@ def get_links(page, keyword, pg, existing_ids):
         page.goto(f"{BASE_URL}&page={pg}&pageSize=25&sfm%5BsimpleSearch%5D%5BkeywordTags%5D%5B0%5D%5Bvalue%5D={urllib.parse.quote(keyword)}", wait_until="domcontentloaded", timeout=30_000)
         page.wait_for_selector("a[href*='/opp/']", timeout=10_000)
     except PwTimeout: return []
-    hrefs = list({a.get_attribute("href") for a in page.query_selector_all("a[href*='/opp/']") if a.get_attribute("href")})
+    hrefs = list({urllib.parse.urljoin("https://sam.gov", a.get_attribute("href")) for a in
+                  page.query_selector_all("a[href*='/opp/']") if a.get_attribute("href")})
+    #hrefs = list({a.get_attribute("href") for a in page.query_selector_all("a[href*='/opp/']") if a.get_attribute("href")})
     print(f"    [debug] page {pg} | hrefs found: {len(hrefs)}")
     return [h for h in hrefs if (m := re.search(r"/opp/([^/]+)/", h)) and m.group(1) not in existing_ids]
 
