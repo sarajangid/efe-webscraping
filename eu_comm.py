@@ -1,224 +1,207 @@
 from summarizer import generate_sam_summary
-import argparse, re, time
+import asyncio
 import pandas as pd
-from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
-from reqs import *
+import re  # ✅ FIX: Added missing import
+from urllib.parse import urljoin
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 import os
 from dotenv import load_dotenv
+from ai_summary import generate_sam_summary
+
+
+BASE_URL = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/calls-for-proposals"
 
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
 
-BASE_URL = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/global-search?isExactMatch=true&keywords=Grants"
+MENA_COUNTRIES = [
+    "Morocco","Algeria","Tunisia","Egypt","Jordan","Palestine","Palestinian",
+    "West Bank","Gaza","Yemen","UAE","United Arab Emirates","Saudi Arabia",
+    "Lebanon","Bahrain","Syria","MENA","Middle East","North Africa",
+    "Arab World","GCC","Maghreb","Levant",
+]
 
-def norm(text):
-    return re.sub(r"\s+", " ", text or "").strip()
+KEYWORDS = [
+    "youth employment","workforce development","employability","job placement",
+    "job creation","livelihoods","economic empowerment","economic inclusion",
+    "apprenticeship","internship","mentorship","job readiness","job search",
+    "labor market activation","economic participation","labor market entry",
+    "NEET","work readiness","job seekers","early-career","reducing inequalities",
+    "skills development","vocational training","technical training","soft skills",
+    "digital skills","green jobs","green skills","TVET","upskilling","reskilling",
+    "entrepreneurship","SME development","financial inclusion","gig economy",
+]
 
-def matches(text, terms):
-    return [t for t in terms if t.lower() in text.lower()]
+COLUMNS = [
+    "Opportunity ID","Title","Application Deadline","Matched Keywords",
+    "Geographic Area","Original Link"
+]
 
-def parse_amount(text):
-    nums = [a.replace(",", "") for a in re.findall(r"[\$€£]?\s*([\d,]+(?:\.\d+)?)", text or "")]
-    return ("", "") if not nums else (nums[0], nums[0]) if len(nums) == 1 else (nums[0], nums[-1])
+def contains_mena(text):
+    if not text:
+        return []
+    text_lower = text.lower()
+    return [c for c in MENA_COUNTRIES if c.lower() in text_lower]
 
-def get(page, sel):
-    el = page.query_selector(sel)
-    return norm(el.inner_text()) if el else ""
+def find_keywords(text):
+    if not text:
+        return []
+    text_lower = text.lower()
+    return [kw for kw in KEYWORDS if kw.lower() in text_lower]
 
-def get_links(page):
-    """Return deduplicated list of {href, surface} dicts from a listing page."""
-    cards = (
-        page.query_selector_all(
-            "div.tender-item, article.tender-card, .search-results .item, "
-            "[class*='TenderCard'], li.result-item, .result-list > div"
-        ) or page.query_selector_all("a[href*='/tenders/']")
-    )
-    print(f"  Found {len(cards)} cards")
-    seen, out = set(), []
-    for card in cards:
-        try:
-            el = card.query_selector("a[href*='/tenders/']") or card
-            href = el.get_attribute("href") or ""
-            if "/tenders/" not in href or href in seen: continue
-            if not href.startswith("http"): href = "https://www.developmentaid.org" + href
-            seen.add(href)
-            out.append({"href": href, "surface": norm(card.inner_text())})
-        except Exception:
-            continue
-    return out
+async def scrape():
+    rows = []
 
-def scrape_detail(page, href, source_url):
-    """Scrape a detail page; return row dict or None if filtered out."""
-    try:
-        page.goto(href, wait_until="domcontentloaded", timeout=30_000)
-        page.wait_for_timeout(3000)
-    except PwTimeout:
-        print(f"    [WARN] Timeout: {href}")
-        return None
-
-    try:
-        body = norm(page.inner_text("body"))
-    except Exception:
-        body = ""
-
-    opp_type = get(page, "[class*='type'],[class*='Type'],.badge,.tag,[class*='category']")
-    if opp_type and "grant" not in opp_type.lower():
-        sidebar = get(page, "aside,.tender-sidebar,.summary,[class*='summary'],[class*='details'],.metadata")
-        if "grant" not in sidebar.lower() and "grant" not in body[:2000].lower(): return None
-
-    geo = get(page, "[class*='location'],[class*='Location'],[class*='country'],[class*='Country'],[class*='region']")
-    mena_hits = matches(geo + " " + body[:3000], MENA_COUNTRIES)
-    if not mena_hits: return None
-    kw_hits = matches(body, KEYWORDS)
-    if not kw_hits: return None
-
-    m = re.search(r"/tenders/(\d+)", href)
-    opp_id = m.group(1) if m else re.sub(r"\W", "", href)[-12:]
-    amt_min, amt_max = parse_amount(
-        get(page, "[class*='amount'],[class*='Amount'],[class*='budget'],[class*='Budget'],[class*='funding']")
-    )
-
-    title = get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A"
-    donor = get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']")
-    sector = get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']")
-    eligibility = get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']")
-    deadline = get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]")
-
-    return {
-        "Opportunity ID":       opp_id,
-        "Opportunity Type":     opp_type or "Grant",
-        "Title":                title,
-        "Donor Name":           donor,
-        "Geographic Area":      geo or ", ".join(mena_hits),
-        "Focus / Sector":       sector,
-        "Application Deadline": deadline,
-        "Amount Min (USD)":     amt_min,
-        "Amount Max (USD)":     amt_max,
-        "Eligibility":          eligibility,
-        "Matched Keywords":     "; ".join(kw_hits),
-        "Source Link":          source_url,
-        "Original Link":        href,
-        "Date Posted":          get(page, "[class*='posted'],[class*='Published'],[class*='published'],time"),
-        # Placeholder for AI summary - will be generated in batch after filtering
-        "AI Summary":           None,
-        # Store raw data for AI summary generation
-        "_opp_data":            {
-            "Title": title,
-            "Donor Name": donor,
-            "Geographic Area": geo or ", ".join(mena_hits),
-            "Focus / Sector": sector,
-            "Eligibility": eligibility,
-            "Amount Max (USD)": amt_max,
-            "Application Deadline": deadline,
-        },
-    }
-
-def run(max_pages=10, headless=False):
-    df = pd.DataFrame(columns=COLUMNS)
-    seen_ids, seen_links = set(), set()
-
-    with sync_playwright() as pw:
-        ctx = pw.chromium.launch(
-            headless=headless,
-            args=["--disable-blink-features=AutomationControlled"],
-        ).new_context(
-            viewport={"width": 1280, "height": 900},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         )
-        lp, dp = ctx.new_page(), ctx.new_page()
+        page = await context.new_page()
 
-        for pn in range(1, max_pages + 1):
-            print(f"\n{'='*50}\n  PAGE {pn}/{max_pages}\n{'='*50}")
-            source = BASE_URL + f"&page={pn}"
-            try:
-                lp.goto(source, wait_until="domcontentloaded", timeout=30_000)
-                lp.wait_for_timeout(4000)
-                lp.wait_for_selector(
-                    "div.tender-item,article.tender-card,.search-results .item,"
-                    "[class*='tender'],[class*='opportunity'],.card",
-                    timeout=15_000,
-                )
-            except PwTimeout:
-                print("  [WARN] Page load timeout, stopping.")
-                break
+        print("🌐 Opening page...")
+        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_load_state("networkidle", timeout=30000)
 
-            entries = get_links(lp)
-            if not entries:
-                print("  [INFO] No entries found, end of results.")
-                break
+        for page_num in range(10):
+            print(f"\n🔎 Scraping page {page_num + 1}\n")
 
-            for i, e in enumerate(entries, 1):
-                href = e["href"]
-                m = re.search(r"/tenders/(\d+)", href)
-                oid = m.group(1) if m else ""
-                print(f"  [{i:02d}/{len(entries)}] {href}")
-                if href in seen_links or (oid and oid in seen_ids):
-                    print("        → Duplicate, skipping.")
+            for i in range(50):  # ✅ FIX: Dynamic card iteration instead of pre-fetching
+                try:
+                    # ✅ FIX: Re-fetch cards list on every iteration to avoid stale references
+                    await page.wait_for_selector('div:has-text("Deadline")', timeout=10000, state="attached")
+                    cards = page.locator("div").filter(has_text="Deadline")
+                    count = await cards.count()
+                    
+                    if i >= count:
+                        print(f"ℹ️ Reached end of cards ({count}) on page {page_num + 1}")
+                        break
+                        
+                    card = cards.nth(i)
+                    
+                    if not await card.is_visible(timeout=5000):
+                        print(f"⚠️ Card {i+1} no longer visible, skipping")
+                        continue
+                        
+                    text = await card.inner_text(timeout=10000)
+                    print(f"\n---\n📌 Card {i+1}")
+
+                    link_el = card.locator("a").first
+                    if not await link_el.count():
+                        print("❌ REJECTED: No link element found")
+                        continue
+                        
+                    link = await link_el.get_attribute("href", timeout=10000)
+                    if not link:
+                        print("❌ REJECTED: No href attribute")
+                        continue
+
+                    full_link = urljoin(BASE_URL, link)
+                    print(f"🔗 Navigating to: {full_link[:80]}...")
+
+                    try:
+                        await page.goto(full_link, wait_until="domcontentloaded", timeout=30000)
+                        await page.wait_for_load_state("networkidle", timeout=15000)
+                    except PlaywrightTimeout:
+                        print(f"⚠️ Navigation timeout for {full_link}, trying to continue...")
+                    except Exception as e:
+                        print(f"❌ Navigation error: {e}")
+                        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+                        continue
+
+                    content = await page.inner_text("body", timeout=10000)
+
+                    mena_matches = contains_mena(content)
+                    if not mena_matches:
+                        print("❌ REJECTED: No MENA match")
+                        await page.go_back(wait_until="domcontentloaded", timeout=10000)
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                        continue
+                    else:
+                        print(f"✅ MENA: {mena_matches}")
+
+                    keyword_matches = find_keywords(content)
+                    if not keyword_matches:
+                        print("❌ REJECTED: No keyword match")
+                        await page.go_back(wait_until="domcontentloaded", timeout=10000)
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                        continue
+                    else:
+                        print(f"✅ Keywords: {keyword_matches}")
+
+                    print("🎯 ACCEPTED")
+
+                    # ✅ FIX: re module now available for regex
+                    deadline = ""
+                    deadline_match = re.search(r'Deadline[:\s]+([^\n]+)', text, re.I)
+                    if deadline_match:
+                        deadline = deadline_match.group(1).strip()
+
+                    rows.append({
+                        "Opportunity ID": "",
+                        "Title": text.split("\n")[0].strip(),
+                        "Application Deadline": deadline,
+                        "Matched Keywords": ", ".join(keyword_matches),
+                        "Geographic Area": ", ".join(mena_matches),
+                        "Original Link": full_link
+                    })
+
+                    await page.go_back(wait_until="domcontentloaded", timeout=15000)
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                    
+                except Exception as e:
+                    print(f"❌ Error processing card: {e}")
+                    try:
+                        if page.url != BASE_URL:
+                            await page.go_back(timeout=10000)
+                            await page.wait_for_load_state("networkidle", timeout=5000)
+                    except:
+                        await page.goto(BASE_URL, timeout=30000)
                     continue
 
-                row = scrape_detail(dp, href, source)
-                if row is None:
-                    print("        → Filtered out.")
-                    continue
-
-                print(f"        ✓ '{row['Title'][:55]}'\n          KW: {row['Matched Keywords'][:75]}")
-                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-                seen_ids.add(str(row["Opportunity ID"]))
-                seen_links.add(href)
-                time.sleep(0.5)
-
-        ctx.browser.close()
-
-    # Generate AI summaries in batch for all filtered results
-    print(f"\nGenerating AI summaries for {len(df)} opportunities...")
-    for idx, row in df.iterrows():
-        if row.get("_opp_data"):
-            df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
-    # Drop the temporary _opp_data column
-    df = df.drop(columns=["_opp_data"])
-
-    print(f"\n{'='*50}\n  Done — {len(df)} matching rows\n{'='*50}\n")
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.max_colwidth", 60)
-    pd.set_option("display.width", 220)
-    print(df.to_string(index=False))
-
-
-    SHEET_NAME = "eu_comm"
-
-    if os.path.exists(EXCEL_FILE):
-        existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
-
-        if SHEET_NAME in existing_sheets:
-            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
-            existing_links = set(existing_df["Opportunity ID"])
-            new_rows = df[~df["Opportunity ID"].isin(existing_links)]
-
-            if not new_rows.empty:
-                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                    startrow = writer.book[SHEET_NAME].max_row
-                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
-                print(f"Added {len(new_rows)} new grants")
+            # Pagination
+            print("🔄 Checking for next page...")
+            next_button = page.locator("button:has-text('Next'):not(:disabled)")
+            
+            if await next_button.count() > 0 and await next_button.is_visible(timeout=5000):
+                print("➡️ Moving to next page...")
+                try:
+                    await next_button.click(timeout=10000)
+                    await page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception as e:
+                    print(f"⚠️ Could not click next: {e}")
+                    break
             else:
-                print("No new grants")
+                print("⛔ No more pages or next button not found")
+                break
 
+        await browser.close()
+    
+    SHEET_NAME = "eu_comm"
+    if rows:
+        df = pd.DataFrame(rows, columns=COLUMNS)
+        print(f"\n✅ Done. Saved {len(rows)} opportunities")
+        if os.path.exists(EXCEL_FILE):
+            if SHEET_NAME in pd.ExcelFile(EXCEL_FILE).sheet_names:
+                new_rows = df[~df["Opportunity ID"].isin(set(pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)["Opportunity ID"]))]
+                if not new_rows.empty:
+                    with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
+                        new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=writer.book[SHEET_NAME].max_row, index=False, header=False)
+                    print(f"Added {len(new_rows)} new grants")
+                else: 
+                    print("No new grants")
+            else:
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer: df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+                print(f"Created new sheet '{SHEET_NAME}'")
         else:
-            # File exists but sheet doesn't — add new sheet without touching others
-            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
-                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
-            print(f"Created new sheet '{SHEET_NAME}'")
+            df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False); print("Created new Excel file")
 
+            return df
     else:
-        # File doesn't exist at all — create it
-        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
-        print("Created new Excel file")
+        print("\n⚠️ No data collected. Check filters or website structure.")
+        return pd.DataFrame(columns=COLUMNS)
 
-    return df
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="DevelopmentAid MENA grant scraper")
-    p.add_argument("--pages", type=int, default=10, help="Pages to scrape (default: 10)")
-    p.add_argument("--headless", action="store_true", help="Run headless")
-    args = p.parse_args()
-    print(f"Pages: {args.pages} | Headless: {args.headless}")
-    run(args.pages, args.headless)
+    asyncio.run(scrape())
