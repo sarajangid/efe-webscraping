@@ -8,6 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
+from openpyxl.styles import Alignment
 from summarizer import generate_darpe_summary
 
 load_dotenv()
@@ -331,14 +332,17 @@ df = apply_filters(df)
 # df with only the true values from above
 df = df[df["passes_all"] == True]
 
+wrap = Alignment(wrap_text=True, vertical="top")
 #CONVERTING TO EXCEL SPREADSHEET
 wb = Workbook()
 ws = wb.active
 ws.title = "Tenders & Grants"
 
 # Header row
-headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
-           "AI Summary", "Amount (USD)", "Eligibility"]
+# headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
+#            "AI Summary", "Amount (USD)", "Eligibility"]
+
+headers = ["Title", "Post Link", "Donor Name", "Geographic Area", "Focus / Sector", "Grant Link","Deadline", "Description", "AI Summary"]
 ws.append(headers)
 
 # Style header row
@@ -365,13 +369,12 @@ for i, row in df.iterrows():
 for _, row in df.iterrows():
     ws.append([
         row["title"],
-        row["type"],
+        row["detail_page_url"],
         row["donor_name"],
         row["geographic_area"],
         row["focus_sector"],
-        row["deadline"],
-        row["detail_page_url"],
         row["original link"],
+        row["deadline"],
         ", ".join(row["attachments"]) if row["attachments"] else "",
         row["ai_summary"],
         "",  # Amount USD (cannot find so filler for now)
@@ -384,6 +387,10 @@ for col in ws.columns:
     max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
     adjusted_width = min(max_length + 4, 80)  # +4 padding, cap at 80
     ws.column_dimensions[col[0].column_letter].width = adjusted_width
+
+for row in ws.iter_rows(min_row=2):
+    for cell in row:
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
 
 # Freeze header row
 ws.freeze_panes = "A2"
