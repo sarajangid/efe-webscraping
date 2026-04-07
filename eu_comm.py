@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
 
-BASE_URL = "https://www.developmentaid.org/tenders/search?sort=relevance.desc&searchedText=grants"
+BASE_URL = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/global-search?isExactMatch=true&keywords=Grants"
 
 def norm(text):
     return re.sub(r"\s+", " ", text or "").strip()
