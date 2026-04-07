@@ -2,15 +2,39 @@ import os
 import re
 import requests
 import shutil
+from dotenv import load_dotenv
+#from PIL import Image
+from io import BytesIO
+import fitz  # PyMuPDF
+
+load_dotenv()
+
+_SHAREPOINT_ENV_KEYS = (
+    "TENANT_ID",
+    "CLIENT_ID",
+    "CLIENT_SECRET",
+    "SITE_ID",
+    "EXCEL_FILE",
+    "ONEDRIVE_FOLDER",
+)
 
 
-def get_access_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET):
+def _sharepoint_env():
+    missing = [k for k in _SHAREPOINT_ENV_KEYS if not os.getenv(k)]
+    if missing:
+        raise RuntimeError(
+            "SharePoint upload needs these variables (set in the environment or a .env file): "
+            + ", ".join(missing)
+        )
+    return {k: os.environ[k] for k in _SHAREPOINT_ENV_KEYS}
 
-    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
+def get_access_token():
+    cfg = _sharepoint_env()
+    url = f"https://login.microsoftonline.com/{cfg['TENANT_ID']}/oauth2/v2.0/token"
 
     data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
+        "client_id": cfg["CLIENT_ID"],
+        "client_secret": cfg["CLIENT_SECRET"],
         "scope": "https://graph.microsoft.com/.default",
         "grant_type": "client_credentials"
     }
@@ -30,12 +54,12 @@ def safe_name(name):
     return clean[:120]
 
 
-def download_documents(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
-
-    folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
-    os.makedirs(folder, exist_ok=True)
+'''def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
 
     for url in documents:
+
+        folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
+        os.makedirs(folder, exist_ok=True)
 
         if not url.startswith("http"):
             url = BASE_DOMAIN + url
@@ -56,12 +80,86 @@ def download_documents(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
             print("Downloaded:", filename)
 
         except Exception as e:
+            print("Download error:", e)'''
+
+def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, documents):
+
+    for url in documents:
+
+        folder = os.path.join(BASE_DOWNLOAD_DIR, safe_name(grant_name))
+        os.makedirs(folder, exist_ok=True)
+
+        if not url.startswith("http"):
+            url = BASE_DOMAIN + url
+
+        original_filename = url.split("/")[-1]
+        stem = os.path.splitext(original_filename)[0]
+        pdf_filename = stem + ".pdf"
+        filepath = os.path.join(folder, pdf_filename)
+
+        if os.path.exists(filepath):
+            continue
+
+        try:
+            r = requests.get(url, stream=True)
+            r.raise_for_status()
+
+            content_type = r.headers.get("Content-Type", "")
+            raw = r.content
+
+            # Already a PDF
+            if "pdf" in content_type or original_filename.lower().endswith(".pdf"):
+                with open(filepath, "wb") as f:
+                    f.write(raw)
+
+            # Image → PDF
+            elif "image" in content_type or original_filename.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff")):
+                #img = Image.open(BytesIO(raw)).convert("RGB")
+                #img.save(filepath, "PDF")
+                img_doc = fitz.open(stream=raw, filetype="image")
+                pdf_bytes = img_doc.convert_to_pdf()
+                img_doc.close()
+                with open(filepath, "wb") as f:
+                    f.write(pdf_bytes)
+
+            # HTML / text → PDF via PyMuPDF
+            elif "html" in content_type or original_filename.lower().endswith((".html", ".htm")):
+                doc = fitz.open()
+                page = doc.new_page()
+                page.insert_text((72, 72), raw.decode("utf-8", errors="replace"), fontsize=10)
+                doc.save(filepath)
+                doc.close()
+
+            # Word documents → PDF via LibreOffice (if available)
+            elif original_filename.lower().endswith((".doc", ".docx")):
+                tmp_path = os.path.join(folder, original_filename)
+                with open(tmp_path, "wb") as f:
+                    f.write(raw)
+                os.system(f'libreoffice --headless --convert-to pdf "{tmp_path}" --outdir "{folder}"')
+                if os.path.exists(filepath):
+                    os.remove(tmp_path)
+
+            # Fallback: wrap raw bytes in a PDF as plain text
+            else:
+                doc = fitz.open()
+                page = doc.new_page()
+                try:
+                    text = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    text = f"[Binary content from: {url}]"
+                page.insert_text((72, 72), text, fontsize=10)
+                doc.save(filepath)
+                doc.close()
+
+            print("Downloaded as PDF:", pdf_filename)
+
+        except Exception as e:
             print("Download error:", e)
 
 
-def upload_to_onedrive(SITE_ID, TOKEN, local_path, remote_path):
-
-    url = f"https://graph.microsoft.com/v1.0/sites/{SITE_ID}/drive/root:/{remote_path}:/content"
+def upload_to_onedrive(TOKEN, local_path, remote_path):
+    site_id = _sharepoint_env()["SITE_ID"]
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{remote_path}:/content"
 
     headers = {
         "Authorization": f"Bearer {TOKEN}",
@@ -78,46 +176,51 @@ def upload_to_onedrive(SITE_ID, TOKEN, local_path, remote_path):
 
     print("Uploaded:", remote_path)
 
-def run_storage_pipeline(
+def download_documents(
     rows,
     BASE_DOWNLOAD_DIR,
     BASE_DOMAIN,
-    EXCEL_FILE,
-    ONEDRIVE_FOLDER,
-    TENANT_ID,
-    CLIENT_ID,
-    CLIENT_SECRET,
-    USER_ID
+    grant_name_col,
+    docs_arr_col
 ):
 
     # 1. download documents
     for row in rows:
-        download_documents(
+        download_documents_helper(
             BASE_DOWNLOAD_DIR,
             BASE_DOMAIN,
-            row["Grant Name"],
-            row["Documents"]
+            row[grant_name_col],
+            row[docs_arr_col]
         )
 
+
+
+
+def process_uploads():
+    cfg = _sharepoint_env()
+    dir_key = "BASE_DOWNLOAD_DIR"
+    if not os.getenv(dir_key):
+        raise RuntimeError(
+            f"{dir_key} must be set (environment or .env) for zipping uploads."
+        )
+    DIR = os.environ[dir_key]
+
     # 2. zip documents
-    zip_file = "Grants_docs.zip"
-    shutil.make_archive("Grants_docs", "zip", BASE_DOWNLOAD_DIR)
+    shutil.make_archive("Grants_docs", "zip", DIR)
 
     # 3. get token
-    TOKEN = get_access_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
+    TOKEN = get_access_token()
 
     # 4. upload excel
     upload_to_onedrive(
-        USER_ID,
         TOKEN,
-        EXCEL_FILE,
-        f"{ONEDRIVE_FOLDER}/Grants.xlsx"
+        cfg["EXCEL_FILE"],
+        f"{cfg['ONEDRIVE_FOLDER']}/Grants.xlsx",
     )
 
     # 5. upload zip
     upload_to_onedrive(
-        USER_ID,
         TOKEN,
-        zip_file,
-        f"{ONEDRIVE_FOLDER}/Grants_docs.zip"
+        "Grants_docs.zip",
+        f"{cfg['ONEDRIVE_FOLDER']}/Grants_docs.zip",
     )

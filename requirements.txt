@@ -5,6 +5,10 @@ selenium
 webdriver-manager
 playwright
 
+#downloads
+pillow
+pymupdf
+
 # Data Processing
 pandas
 openpyxl

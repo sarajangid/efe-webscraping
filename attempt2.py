@@ -1,61 +1,46 @@
 import re
-# import urllib3
-# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import time
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from dotenv import load_dotenv
 import os
+from summarizer import generate_darpe_summary
 
 load_dotenv()
-# value = os.getenv("MY_KEY")
 
-# # 1. Start a session
-# session = requests.Session()
+# 1. Start a session
+session = requests.Session()
 
-# # # Optional: Add headers so you look like a real browser
-# # session.headers.update({
-# #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-# # })
+login_url = "https://darpe.me/darpe-login.php" # The URL the form submits to
+target_url = "https://darpe.me/tenders-and-grants/" # The page you actually want to scrape
 
-# login_url = "https://example.com/login_endpoint" # The URL the form submits to
-# target_url = "https://example.com/protected-detail-page" # The page you actually want to scrape
-
-# user_field_name = os.getenv("USER_FIELD_NAME")
-# username = os.getenv("USER_NAME")
-# pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
-# password = os.getenv("PASSWORD")
+user_field_name = os.getenv("USER_FIELD_NAME")
+username = os.getenv("USER_NAME")
+pass_field_name = os.getenv("PASSWORD_FIELD_NAME")
+password = os.getenv("PASSWORD")
 
 
-# # 2. Create your payload using the exact field names the site expects
-# login_data = {
-#     user_field_name: username,
-#     pass_field_name: password,
-#     # Sometimes you need a hidden token here too, like an anti-CSRF token
-# }
+# 2. Create your payload using the exact field names the site expects
+login_data = {
+    "log": username,
+    "pwd": password,
+    "wp-submit": "Sign in",
+    "redirect_to": "https://darpe.me"
+    # Sometimes you need a hidden token here too, like an anti-CSRF token
+}
 
-# # 3. Send the login request
-# print("Logging in...")
-# login_response = session.post(login_url, data=login_data, verify=False)
+# 3. Send the login request
+print("Logging in...")
+login_response = session.post(login_url, data=login_data)
 
-# # Optional: Check if login was successful by looking for a specific word in the response
-# if "Sign Out" in login_response.text:
-#     print("Login successful!")
-# else:
-#     print("Login might have failed. Check credentials or hidden tokens.")
+detail_response = session.get(target_url)
 
-# # 4. Request the protected page using the SAME session
-# detail_response = session.get(target_url)
-
-# # 5. Parse the protected HTML
-# soup = BeautifulSoup(detail_response.text, "html.parser")
-
-# # Now you can search for your target elements!
-# target_div = soup.select("div.gray_bg") 
+# 5. Parse the protected HTML
+soup = BeautifulSoup(detail_response.text, "html.parser")
 
 BASE_URL = "https://darpe.me"
 LISTING_URL = "https://darpe.me/tenders-and-grants/"  # replace with actual listing URL
@@ -100,11 +85,11 @@ def extract_listing_rows(html):
             listing_type = "Other"
 
 
-        # 1) title + detail page link
+        # 1) title 
         title_link = row.select_one("a[href*='darpe-entries']")
         title = clean_text(title_link.get_text()) if title_link else ""
         detail_page_url = urljoin(BASE_URL, title_link["href"]) if title_link and title_link.has_attr("href") else ""
-
+        
         # 2) donor name from "Client Name : ..."
         donor_name = ""
         if title_link:
@@ -122,34 +107,32 @@ def extract_listing_rows(html):
         geographic_area = clean_text(tds[4].get_text(" ", strip=True)) if len(tds) > 4 else ""
 
         # Access inner link
+        info_soup = None
         try:
-            res = requests.get(detail_page_url, headers=HEADERS)
+            res = session.get(detail_page_url, headers=HEADERS)  # use session!
             res.raise_for_status()
-
             info_soup = BeautifulSoup(res.text, "html.parser")
-
-            page_title = info_soup.title.get_text(strip=True) if info_soup.title else "No Title"
-            # print(f"Landed on page: {page_title}")
-
-            info_table = info_soup.select("div.gray-bg")
-            # if not info_table:
-            #     print(f"--> Warning: 'div.gray-bg' not found on {detail_page_url}")
-            # else:
-            #     print(f"--> Success! Found target div.")
-            #     print(info_table)
-            
-            # lis = info_table[0].find_all("li")
-            # if not lis:
-            #     continue
-            # print(lis)
         except Exception as e:
             print(f"Error crawling {detail_page_url}: {e}")
         
-        # 6) pdfs
-        # follow up once we get access
+        # 6) attachments
+        attachment_urls = []
+        if info_soup:
+            # find the "Attachments" heading
+            attachments_heading = info_soup.find(lambda tag: tag.name and "Attachments" in tag.get_text() and tag.name in ["p", "h2", "h3", "h4", "strong", "b"])
+            if attachments_heading:
+                parent_li = attachments_heading.find_parent("li")
+                if parent_li:
+                    attachment_urls = [a["href"] for a in parent_li.find_all("a", href=True)]
 
         # 7) og link
-        # follow up once we get access
+        og_link = ""
+        if info_soup:
+            bold_p = info_soup.find("p", style=lambda s: s and "font-weight:bold" in s, string=lambda t: t and "Link to original" in t)
+            if bold_p:
+                parent_li = bold_p.find_parent("li")
+                og_anchor = parent_li.find("a", href=True) if parent_li else None
+                og_link = og_anchor["href"] if og_anchor else ""
 
         results.append({
             "type": listing_type,
@@ -159,13 +142,16 @@ def extract_listing_rows(html):
             "deadline": deadline,
             "focus_sector": focus_sector,
             "geographic_area": geographic_area,
+            "attachments": attachment_urls,
+            "original link": og_link,
+            "ai_summary": ""
         })
 
     return results
 
 #makes http get request
 def fetch_html(url):
-    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp = session.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -297,27 +283,62 @@ def apply_filters(df):
     df["passes_all"]        = df["filter_workforce"] & df["filter_type"] & df["filter_geography"]
     return df
 
+def get_total_pages():
+    html = fetch_html(LISTING_URL)
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # grab all page number links and find the highest one
+    page_links = soup.select("a.page-numbers")
+    page_numbers = []
+    for link in page_links:
+        text = link.get_text(strip=True).replace(",", "")  # removes comma from "1,913"
+        if text.isdigit():
+            page_numbers.append(int(text))
+    
+    return max(page_numbers) if page_numbers else 1
+total_pages = get_total_pages()
 
 #RUNS THE ACTUAL CODE:
 
-html = fetch_html(LISTING_URL)
-listing_items = extract_listing_rows(html)
+MAX_PAGES = 1 # ← change this to however many pages you want
 
-df = pd.DataFrame(listing_items)
-#df with true or false value whether it matches a requirement
+all_items = []
+
+for page_num in range(1, MAX_PAGES + 1):
+    print(f"Scraping page {page_num} of {MAX_PAGES}...")
+    
+    if page_num == 1:
+        page_url = LISTING_URL
+    else:
+        page_url = f"{BASE_URL}/tenders-and-grants/page/{page_num}/"
+    
+    html = fetch_html(page_url)
+    items = extract_listing_rows(html)
+    
+    if not items:
+        print(f"No items found on page {page_num}, stopping early.")
+        break
+    
+    all_items.extend(items)
+    time.sleep(1)
+
+print(f"Total items scraped: {len(all_items)}")
+
+df = pd.DataFrame(all_items)
+# df with true or false value whether it matches a requirement
 df = apply_filters(df)
 
-#df with only the true values from above
+# df with only the true values from above
 df = df[df["passes_all"] == True]
-# print(df.head())
 
 #CONVERTING TO EXCEL SPREADSHEET
-wb = Workbook()
+'''wb = Workbook()
 ws = wb.active
 ws.title = "Tenders & Grants"
 
 # Header row
-headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Amount (USD)", "Eligibility"]
+headers = ["Title", "Type","Donor Name", "Geographic Area", "Focus Sector", "Deadline", "Source Link", "Original Link", "Attachments",
+           "AI Summary", "Amount (USD)", "Eligibility"]
 ws.append(headers)
 
 # Style header row
@@ -325,6 +346,20 @@ for cell in ws[1]:
     cell.font = Font(bold=True, color="FFFFFF", name="Arial")
     cell.fill = PatternFill("solid", start_color="2E4057")
     cell.alignment = Alignment(horizontal="center")
+
+# Generating AI Summaries
+for i, row in df.iterrows():
+    text_for_ai = " ".join([
+        row["title"],
+        row["focus_sector"],
+        row["geographic_area"]
+    ])
+
+    summary = generate_darpe_summary(text_for_ai)
+
+    df.at[i, "ai_summary"] = summary
+
+    time.sleep(12) # prevents Gemini rate limit
 
 # Data rows
 for _, row in df.iterrows():
@@ -336,6 +371,9 @@ for _, row in df.iterrows():
         row["focus_sector"],
         row["deadline"],
         row["detail_page_url"],
+        row["original link"],
+        ", ".join(row["attachments"]) if row["attachments"] else "",
+        row["ai_summary"],
         "",  # Amount USD (cannot find so filler for now)
         ""   # Eligibility (cannot find so filler for now)
     ])
@@ -351,61 +389,86 @@ for col in ws.columns:
 ws.freeze_panes = "A2"
 
 wb.save("tenders_grants.xlsx")
-print("Saved to tenders_grants.xlsx")
+print("Saved to tenders_grants.xlsx")'''
 
-# #TRYING TO EXACT FOR INDIVIDUAL PAGES
-# def extract_detail_page(detail_url):
-#     html = fetch_html(detail_url)
-#     soup = BeautifulSoup(html, "html.parser")
+EXCEL_FILE = os.getenv("EXCEL_FILE")
+SHEET_NAME = "darpe"
 
-#     # collect all links
-#     links = []
-#     for a in soup.find_all("a", href=True):
-#         href = urljoin(detail_url, a["href"])
-#         text = clean_text(a.get_text(" ", strip=True))
-#         links.append({"text": text, "href": href})
+def _write_headers_and_data(ws, df):
+    headers = ["Title", "Type", "Donor Name", "Geographic Area", "Focus Sector",
+               "Deadline", "Source Link", "Original Link", "Attachments", "AI Summary", "Amount (USD)", "Eligibility"]
+    ws.append(headers)
 
-#     # PDFs
-#     pdf_links = [link["href"] for link in links if ".pdf" in link["href"].lower()]
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF", name="Arial")
+        cell.fill = PatternFill("solid", start_color="2E4057")
+        cell.alignment = Alignment(horizontal="center")
 
-#     # source/original link heuristics
-#     source_link = ""
-#     original_link = ""
+    for i, row in df.iterrows():
+        text_for_ai = " ".join([
+            row["title"],
+            row["focus_sector"],
+            row["geographic_area"]
+        ])
 
-#     for link in links:
-#         text_lower = link["text"].lower()
-#         href_lower = link["href"].lower()
+        summary = generate_darpe_summary(text_for_ai)
 
-#         if not source_link and ("source" in text_lower or "official" in text_lower):
-#             source_link = link["href"]
+        df.at[i, "ai_summary"] = summary
 
-#         if not original_link and ("original" in text_lower or "apply" in text_lower or "full notice" in text_lower):
-#             original_link = link["href"]
+        time.sleep(12) # prevents Gemini rate limit
 
-#     # if there are no labeled links, try picking first non-darpe external link
-#     external_links = [
-#         link["href"] for link in links
-#         if "darpe.me" not in link["href"]
-#     ]
+    for _, row in df.iterrows():
+        ws.append([
+            row["title"], row["type"], row["donor_name"], row["geographic_area"],
+            row["focus_sector"], row["deadline"], row["detail_page_url"],
+            row["original link"],
+            ", ".join(row["attachments"]) if row["attachments"] else "",
+            row["ai_summary"],
+            "", ""
+        ])
 
-#     if not source_link and external_links:
-#         source_link = external_links[0]
+def _apply_style(ws):
+    for col in ws.columns:
+        max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 80)
+    ws.freeze_panes = "A2"
 
-#     if not original_link and len(external_links) > 1:
-#         original_link = external_links[1]
+def write_styled_sheet(df, excel_file, sheet_name):
+    if os.path.exists(excel_file):
+        wb = load_workbook(excel_file)
+        if sheet_name in wb.sheetnames:
+            # Sheet exists — dedup and append only new rows
+            existing_df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            existing_links = set(existing_df["Source Link"])
+            new_rows = df[~df["detail_page_url"].isin(existing_links)]
+            if new_rows.empty:
+                print("No new grants")
+                return
+            ws = wb[sheet_name]
+            for _, row in new_rows.iterrows():
+                ws.append([
+                    row["title"], row["type"], row["donor_name"], row["geographic_area"],
+                    row["focus_sector"], row["deadline"], row["detail_page_url"],
+                    row["original link"],
+                    ", ".join(row["attachments"]) if row["attachments"] else "",
+                    row["ai_summary"],
+                    "", ""
+                ])
+            print(f"Added {len(new_rows)} new grants")
+        else:
+            # File exists, sheet doesn't
+            ws = wb.create_sheet(sheet_name)
+            _write_headers_and_data(ws, df)
+            print(f"Created new sheet '{sheet_name}'")
+    else:
+        # File doesn't exist
+        wb = Workbook()
+        ws = wb.active
+        ws.title = sheet_name
+        _write_headers_and_data(ws, df)
+        print("Created new Excel file")
 
-#     # description text
-#     content_candidates = soup.select("article, .entry-content, .post-content, .content, .elementor-widget-container")
-#     full_description = ""
-#     if content_candidates:
-#         full_description = clean_text(" ".join(c.get_text(" ", strip=True) for c in content_candidates))
-#     else:
-#         full_description = clean_text(soup.get_text(" ", strip=True))
+    _apply_style(wb[sheet_name])
+    wb.save(excel_file)
 
-#     return {
-#         "pdf_links": pdf_links,
-#         "source_link": source_link,
-#         "original_link": original_link,
-#         "full_description": full_description,
-#     }
-    
+write_styled_sheet(df, EXCEL_FILE, SHEET_NAME)

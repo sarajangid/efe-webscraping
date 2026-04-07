@@ -15,6 +15,11 @@ import logging
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from summarizer import generate_simpler_summary
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -342,34 +347,69 @@ def main():
 
     df = pd.DataFrame(all_grants)
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = 'Grants'
+    SHEET_NAME = "Funds for NGOs"
 
-    headers = list(df.columns)
-    ws.append(headers)
+    def _apply_styles(ws, data_start_row=2):
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color='FFFFFF', name='Arial')
+            cell.fill = PatternFill('solid', start_color='2E4057')
+            cell.alignment = Alignment(horizontal='center', wrap_text=True)
+        for row in ws.iter_rows(min_row=data_start_row):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical='top')
+        for col in ws.columns:
+            max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 80)
+        ws.freeze_panes = 'A2'
 
-    # Style header row
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color='FFFFFF', name='Arial')
-        cell.fill = PatternFill('solid', start_color='2E4057')
-        cell.alignment = Alignment(horizontal='center', wrap_text=True)
+    if os.path.exists(EXCEL_FILE):
+        from openpyxl import load_workbook
+        wb = load_workbook(EXCEL_FILE)
 
-    # Data rows with wrap_text
-    for _, row in df.iterrows():
-        ws.append(list(row))
-    for row in ws.iter_rows(min_row=2):
-        for cell in row:
-            cell.alignment = Alignment(wrap_text=True, vertical='top')
-
-    # Auto-fit column widths
-    for col in ws.columns:
-        max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 80)
-
-    ws.freeze_panes = 'A2'
-    wb.save('grants.xlsx')
-    logger.info(f"Saved {len(df)} grants → grants.xlsx")
+        if SHEET_NAME in wb.sheetnames:
+            ws = wb[SHEET_NAME]
+            # Deduplicate by application_link
+            link_col_idx = next(
+                (cell.column for cell in ws[1] if cell.value == 'application_link'), None
+            )
+            existing_links = set()
+            if link_col_idx:
+                for row in ws.iter_rows(min_row=2, min_col=link_col_idx, max_col=link_col_idx):
+                    for cell in row:
+                        if cell.value:
+                            existing_links.add(cell.value)
+            new_rows = df[~df["application_link"].isin(existing_links)]
+            if not new_rows.empty:
+                start_row = ws.max_row + 1
+                for i, (_, row) in enumerate(new_rows.iterrows()):
+                    for j, val in enumerate(row, 1):
+                        cell = ws.cell(row=start_row + i, column=j, value=val)
+                        cell.alignment = Alignment(wrap_text=True, vertical='top')
+                for col in ws.columns:
+                    max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
+                    ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 80)
+                wb.save(EXCEL_FILE)
+                logger.info(f"Added {len(new_rows)} new grants → {EXCEL_FILE}")
+            else:
+                logger.info("No new grants to add.")
+        else:
+            ws = wb.create_sheet(SHEET_NAME)
+            ws.append(list(df.columns))
+            for _, row in df.iterrows():
+                ws.append(list(row))
+            _apply_styles(ws)
+            wb.save(EXCEL_FILE)
+            logger.info(f"Created sheet '{SHEET_NAME}' with {len(df)} grants → {EXCEL_FILE}")
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = SHEET_NAME
+        ws.append(list(df.columns))
+        for _, row in df.iterrows():
+            ws.append(list(row))
+        _apply_styles(ws)
+        wb.save(EXCEL_FILE)
+        logger.info(f"Saved {len(df)} grants → {EXCEL_FILE}")
 
 
 if __name__ == '__main__':
