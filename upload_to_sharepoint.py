@@ -9,20 +9,32 @@ import fitz  # PyMuPDF
 
 load_dotenv()
 
-TENANT_ID = os.environ["TENANT_ID"]
-CLIENT_ID = os.environ["CLIENT_ID"]
-CLIENT_SECRET = os.environ["CLIENT_SECRET"]
-SITE_ID = os.environ["SITE_ID"]
-EXCEL_FILE = os.environ["EXCEL_FILE"]
-ONEDRIVE_FOLDER = os.environ["ONEDRIVE_FOLDER"]
+_SHAREPOINT_ENV_KEYS = (
+    "TENANT_ID",
+    "CLIENT_ID",
+    "CLIENT_SECRET",
+    "SITE_ID",
+    "EXCEL_FILE",
+    "ONEDRIVE_FOLDER",
+)
+
+
+def _sharepoint_env():
+    missing = [k for k in _SHAREPOINT_ENV_KEYS if not os.getenv(k)]
+    if missing:
+        raise RuntimeError(
+            "SharePoint upload needs these variables (set in the environment or a .env file): "
+            + ", ".join(missing)
+        )
+    return {k: os.environ[k] for k in _SHAREPOINT_ENV_KEYS}
 
 def get_access_token():
-
-    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
+    cfg = _sharepoint_env()
+    url = f"https://login.microsoftonline.com/{cfg['TENANT_ID']}/oauth2/v2.0/token"
 
     data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
+        "client_id": cfg["CLIENT_ID"],
+        "client_secret": cfg["CLIENT_SECRET"],
         "scope": "https://graph.microsoft.com/.default",
         "grant_type": "client_credentials"
     }
@@ -146,8 +158,8 @@ def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, docume
 
 
 def upload_to_onedrive(TOKEN, local_path, remote_path):
-
-    url = f"https://graph.microsoft.com/v1.0/sites/{SITE_ID}/drive/root:/{remote_path}:/content"
+    site_id = _sharepoint_env()["SITE_ID"]
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{remote_path}:/content"
 
     headers = {
         "Authorization": f"Bearer {TOKEN}",
@@ -185,8 +197,13 @@ def download_documents(
 
 
 def process_uploads():
-
-    DIR = os.environ["BASE_DOWNLOAD_DIR"]
+    cfg = _sharepoint_env()
+    dir_key = "BASE_DOWNLOAD_DIR"
+    if not os.getenv(dir_key):
+        raise RuntimeError(
+            f"{dir_key} must be set (environment or .env) for zipping uploads."
+        )
+    DIR = os.environ[dir_key]
 
     # 2. zip documents
     shutil.make_archive("Grants_docs", "zip", DIR)
@@ -197,13 +214,13 @@ def process_uploads():
     # 4. upload excel
     upload_to_onedrive(
         TOKEN,
-        EXCEL_FILE,
-        f"{ONEDRIVE_FOLDER}/Grants.xlsx",
+        cfg["EXCEL_FILE"],
+        f"{cfg['ONEDRIVE_FOLDER']}/Grants.xlsx",
     )
 
     # 5. upload zip
     upload_to_onedrive(
         TOKEN,
         "Grants_docs.zip",
-        f"{ONEDRIVE_FOLDER}/Grants_docs.zip",
+        f"{cfg['ONEDRIVE_FOLDER']}/Grants_docs.zip",
     )
