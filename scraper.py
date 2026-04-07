@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 from dotenv import load_dotenv
+from pathlib import Path
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -17,6 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import TimeoutException
 
 from upload_to_sharepoint import download_documents
 from summarizer import generate_simpler_summary
@@ -25,10 +27,32 @@ load_dotenv()
 EXCEL_FILE=os.environ["EXCEL_FILE"]
 BASE_DOWNLOAD_DIR = os.environ["BASE_DOWNLOAD_DIR"]
 
+MAX_SEARCH_PAGES = int(os.getenv("SIMPLER_MAX_PAGES", "900"))
+DETAIL_REQUEST_TIMEOUT = 30
 
 ############################
 # CONFIG
 ############################
+
+def find_chrome_binary():
+    candidates = [
+        os.getenv("CHROME_BIN"),
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]
+
+    for pattern in [
+        "/ms-playwright/chromium-*/chrome-linux/chrome",
+        "/ms-playwright/chromium-*/chrome-linux/headless_shell",
+    ]:
+        candidates.extend(str(p) for p in Path("/").glob(pattern.lstrip("/")))
+
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+
+    raise FileNotFoundError("Could not find a Chrome/Chromium binary")
 
 BASE_SEARCH_URL = "https://simpler.grants.gov/search"
 BASE_DOMAIN = "https://simpler.grants.gov"
@@ -49,7 +73,17 @@ os.makedirs(os.path.join(BASE_DOWNLOAD_DIR,SHEET_NAME), exist_ok=True)
 
 search_url = BASE_SEARCH_URL + "?" + urlencode(params)
 
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+options = webdriver.ChromeOptions()
+#options.binary_location = find_chrome_binary()
+options.add_argument("--headless=new")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
+options.add_argument("--disable-gpu")
+options.add_argument("--disable-blink-features=AutomationControlled")
+
+driver = webdriver.Chrome(options=options)
+
+#driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
 driver.get(search_url)
 
 wait = WebDriverWait(driver, 10)
@@ -57,41 +91,62 @@ wait = WebDriverWait(driver, 10)
 rows = []
 links = []
 
-while True:
+for page_num in range(1, MAX_SEARCH_PAGES + 1):
+    print(f"Scanning search page {page_num}/{MAX_SEARCH_PAGES}")
 
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
+    try:
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "tr.border-base")))
+    except TimeoutException:
+        print("Timed out waiting for search results table; stopping pagination.")
+        break
 
     soup = BeautifulSoup(driver.page_source, "html.parser")
     results = soup.select("tr.border-base")
 
+    if not results:
+        print("No search results found on page; stopping pagination.")
+        break
+
+    before_count = len(links)
+
     for result in results:
-
         a_tag = result.select_one("a")
-
         if not a_tag:
             continue
 
         relative_link = a_tag.get("href")
-        full_link = BASE_DOMAIN + relative_link
+        if not relative_link:
+            continue
 
+        full_link = BASE_DOMAIN + relative_link
         if full_link not in links:
             links.append(full_link)
 
-    print(f"Collected {len(links)} links")
+    print(f"Collected {len(links)} total links (+{len(links) - before_count} new)")
+
+    if page_num >= MAX_SEARCH_PAGES:
+        print("Reached max search pages limit.")
+        break
 
     try:
-
         next_button = wait.until(
             EC.element_to_be_clickable(
                 (By.CSS_SELECTOR, "button[data-testid='pagination-next']")
             )
         )
 
+        if not next_button.is_enabled():
+            print("Next button is disabled; stopping pagination.")
+            break
+
         driver.execute_script("arguments[0].click();", next_button)
         time.sleep(2)
 
-    except:
-        print("No more pages")
+    except TimeoutException:
+        print("No next button found; stopping pagination.")
+        break
+    except Exception as e:
+        print(f"Error moving to next page: {e}")
         break
 
 driver.quit()
@@ -124,7 +179,8 @@ driver.quit()'''
 for detail_link in links:
 
     try:
-        response = requests.get(detail_link)
+        response = requests.get(detail_link, timeout=DETAIL_REQUEST_TIMEOUT)
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         title_tag = soup.select_one(
@@ -318,6 +374,10 @@ for detail_link in links:
 ############################
 
 df = pd.DataFrame(rows)
+
+if df.empty:
+    print("No grants found; skipping Excel update and document download.")
+    raise SystemExit(0)
 
 df["Documents"] = df["Documents"].apply(json.dumps)
 

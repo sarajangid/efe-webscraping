@@ -16,6 +16,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from summarizer import generate_summary
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -70,26 +71,63 @@ TOPIC_KEYWORDS = [
     "business association", "chamber of commerce", "industry federation",
 ]
 
+def find_chrome_binary():
+    candidates = [
+        os.getenv("CHROME_BIN"),
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]
+
+    for pattern in [
+        "/ms-playwright/chromium-*/chrome-linux/chrome",
+        "/ms-playwright/chromium-*/chrome-linux/headless_shell",
+    ]:
+        candidates.extend(str(p) for p in Path("/").glob(pattern.lstrip("/")))
+
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+
+    raise FileNotFoundError("Could not find a Chrome/Chromium binary")
+
 # ── Step 1: Collect post URLs ─────────────────────────────────────────────────
 
 def get_post_urls_from_archive(driver, archive_url):
     """Scrape all post URLs from a single archive page by scrolling to the bottom."""
     driver.get(archive_url)
-    WebDriverWait(driver, 15).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/p/']"))
+
+    # Wait for the page itself to load first, not for post links specifically
+    WebDriverWait(driver, 30).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
+    WebDriverWait(driver, 20).until(
+        EC.presence_of_element_located((By.TAG_NAME, "body"))
     )
 
     last_height = 0
-    for _ in range(20):
+    stable_scrolls = 0
+
+    for _ in range(30):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(2)
+
         new_height = driver.execute_script("return document.body.scrollHeight")
+
+        # If the page stops growing for 2 rounds, stop scrolling
         if new_height == last_height:
-            break
+            stable_scrolls += 1
+        else:
+            stable_scrolls = 0
+
         last_height = new_height
+
+        if stable_scrolls >= 2:
+            break
 
     urls = []
     seen = set()
+
     for a in driver.find_elements(By.CSS_SELECTOR, "a[href*='/p/']"):
         href = a.get_attribute("href")
         if href:
@@ -97,6 +135,8 @@ def get_post_urls_from_archive(driver, archive_url):
             if clean not in seen:
                 seen.add(clean)
                 urls.append(clean)
+
+    print(f"      -> found {len(urls)} raw post link(s)")
     return urls
 
 
@@ -105,6 +145,15 @@ def get_post_urls():
     options.add_argument("--headless")
     options.add_argument("--start-maximized")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    #driver = webdriver.Chrome(options=options)
+    options = webdriver.ChromeOptions()
+    #options.binary_location = find_chrome_binary()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+
     driver = webdriver.Chrome(options=options)
     post_urls = []
 
@@ -112,7 +161,12 @@ def get_post_urls():
         seen_global = set()
         for archive_url in ARCHIVE_URLS:
             print(f"    Scanning: {archive_url}")
-            urls = get_post_urls_from_archive(driver, archive_url)
+            try:
+                urls = get_post_urls_from_archive(driver, archive_url)
+            except Exception as e:
+                print(f"      [WARN] Failed to scrape archive: {e}")
+                continue
+
             new_count = 0
             for url in urls:
                 if url not in seen_global:

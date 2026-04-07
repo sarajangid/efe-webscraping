@@ -53,7 +53,10 @@ async def scrape():
     rows = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
         context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -233,8 +236,8 @@ async def scrape():
                 # Simple deduplication based on Title + Link (since ID is empty)
                 combined = pd.concat([existing_df, df], ignore_index=True)
                 combined = combined.drop_duplicates(subset=["Original Link"], keep="last")
-                
-                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="w") as writer:
+
+                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
                     combined.to_excel(writer, sheet_name=SHEET_NAME, index=False)
                 print(f"Merged and saved. Total rows: {len(combined)}")
             else:

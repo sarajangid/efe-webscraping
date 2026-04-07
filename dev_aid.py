@@ -113,7 +113,7 @@ def scrape_detail(page, href, source_url):
         },
     }
 
-def run(max_pages=10, headless=False):
+def run(max_pages=10, headless=True):
     df = pd.DataFrame(columns=COLUMNS)
     seen_ids, seen_links = set(), set()
 
