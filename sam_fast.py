@@ -3,12 +3,12 @@ import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 import os
 from dotenv import load_dotenv
-
-load_dotenv()
-EXCEL_FILE = os.environ["EXCEL_FILE"]
 from summarizer import generate_sam_summary
 from reqs import MENA_COUNTRIES, KEYWORDS, COLUMNS
 from dev_aid import norm, get, matches, parse_amount
+
+load_dotenv()
+EXCEL_FILE = os.environ["EXCEL_FILE"]
 
 BASE_URL = "https://sam.gov/search/?index=_all&sort=-modifiedDate&sfm%5Bstatus%5D%5Bis_active%5D=true&sfm%5Bstatus%5D%5Bis_inactive%5D=true&sfm%5BsimpleSearch%5D%5BkeywordRadio%5D=ALL"
 
