@@ -13,6 +13,87 @@ BASE_URL = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/scree
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
 
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+
+HEADER_COLOR = "1F4E79"
+HEADER_FILL = PatternFill(start_color=HEADER_COLOR, end_color=HEADER_COLOR, fill_type="solid")
+HEADER_FONT = Font(color="FFFFFF", bold=True, size=11)
+HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
+BODY_ALIGNMENT = Alignment(vertical="top", wrap_text=True)
+
+DEFAULT_WIDTHS = {
+    "Opportunity ID": 18,
+    "Opportunity Type": 22,
+    "Title": 40,
+    "Donor Name": 28,
+    "Geographic Area": 24,
+    "Focus / Sector": 28,
+    "Application Deadline": 20,
+    "Amount Min (USD)": 18,
+    "Amount Max (USD)": 18,
+    "Eligibility": 42,
+    "Eligibility Requirements": 45,
+    "Matched Keywords": 32,
+    "Source Link": 45,
+    "Original Link": 45,
+    "Date Posted": 18,
+    "Date Scraped": 16,
+    "Grant Name": 38,
+    "Agency": 28,
+    "Due Date": 18,
+    "Award Minimum": 18,
+    "Award Maximum": 18,
+    "Description": 65,
+    "Documents": 45,
+    "Application Link": 45,
+    "AI Summary": 65,
+    "Post Link": 50,
+    "Funding Amount (USD)": 22,
+    "Grant Link": 45,
+    "Deadline": 18,
+}
+
+def _auto_width(header: str) -> float:
+    header = (header or "").strip()
+    if not header:
+        return 18
+    return min(max(len(header) + 4, 18), 45)
+
+def apply_impact_formatting(path: str, sheet_name: str, custom_widths=None):
+    wb = openpyxl.load_workbook(path)
+
+    if sheet_name not in wb.sheetnames:
+        wb.save(path)
+        return
+
+    ws = wb[sheet_name]
+    widths = {**DEFAULT_WIDTHS, **(custom_widths or {})}
+
+    if ws.max_row >= 1:
+        for col_idx in range(1, ws.max_column + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            header = "" if cell.value is None else str(cell.value)
+
+            cell.fill = HEADER_FILL
+            cell.font = HEADER_FONT
+            cell.alignment = HEADER_ALIGNMENT
+
+            ws.column_dimensions[get_column_letter(col_idx)].width = widths.get(
+                header, _auto_width(header)
+            )
+
+        ws.row_dimensions[1].height = 30
+
+    for row_idx in range(2, ws.max_row + 1):
+        ws.row_dimensions[row_idx].height = 80
+        for col_idx in range(1, ws.max_column + 1):
+            ws.cell(row=row_idx, column=col_idx).alignment = BODY_ALIGNMENT
+
+    ws.freeze_panes = "A2"
+    wb.save(path)
+
 MENA_COUNTRIES = [
     "Morocco","Algeria","Tunisia","Egypt","Jordan","Palestine","Palestinian",
     "West Bank","Gaza","Yemen","UAE","United Arab Emirates","Saudi Arabia",
@@ -248,6 +329,7 @@ async def scrape():
             df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
             print("Created new Excel file")
 
+        apply_impact_formatting(EXCEL_FILE, SHEET_NAME)
         return df
     else:
         print("\n⚠️ No data collected. Check filters or website structure.")

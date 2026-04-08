@@ -85,13 +85,13 @@ SCRAPER_COMMANDS = {
 }
 
 SCRAPER_TIMEOUTS = {
-    "attempt2.py": 900,
-    "scraper.py": 900,
-    "impact_funding_scraper.py": 900,
-    "dev_aid.py": 1800,
-    "eu_comm.py": 1800,
-    "fundsforngos_webscraper.py": 1800,
-    "sam_fast.py": 1800,
+    "attempt2.py": 7200,
+    "scraper.py": 7200,
+    "impact_funding_scraper.py": 7200,
+    "dev_aid.py": 7200,
+    "eu_comm.py": 7200,
+    "fundsforngos_webscraper.py": 7200,
+    "sam_fast.py": 7200,
 }
 
 _ROOT = Path(__file__).resolve().parent
