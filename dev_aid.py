@@ -96,7 +96,14 @@ def norm(text):
     return re.sub(r"\s+", " ", text or "").strip()
 
 def matches(text, terms):
-    return [t for t in terms if t.lower() in text.lower()]
+    """Return terms found in text using whole-word matching.
+    Plain substring matching causes false positives:
+      "Levant"  matches inside "reLEVANT"  (very common in grant text)
+      "MENA"    matches inside "pheMENAl", "MENAce", "aMENAble"
+    Word boundaries prevent these."""
+    if not text:
+        return []
+    return [t for t in terms if re.search(r'\b' + re.escape(t) + r'\b', text, re.IGNORECASE)]
 
 def parse_amount(text):
     nums = [a.replace(",", "") for a in re.findall(r"[\$€£]?\s*([\d,]+(?:\.\d+)?)", text or "")]
@@ -128,6 +135,39 @@ def get_links(page):
             continue
     return out
 
+def _main_content(page, full_body):
+    """Return the main content text of the page, excluding nav/sidebar elements.
+    DevelopmentAid sidebars list all geographic filter labels as whole words
+    (e.g. "Jordan", "Lebanon"), which pollute MENA matching if we search the
+    full body.  We try semantic selectors first, then fall back to JS DOM
+    surgery (clone + strip nav/aside), then fall back to the raw body."""
+    for sel in ("main", "[role='main']", "article",
+                "[class*='tender-detail']", "[class*='tender-body']",
+                "[class*='detail-content']", "[class*='opportunity-detail']"):
+        try:
+            candidate = norm(page.inner_text(sel))
+            if candidate and len(candidate) > 200:
+                return candidate
+        except Exception:
+            continue
+    try:
+        cleaned = page.evaluate("""() => {
+            const clone = document.body.cloneNode(true);
+            clone.querySelectorAll(
+                'nav, header, footer, aside, ' +
+                '[role="navigation"], [role="complementary"], [role="banner"], ' +
+                '[aria-label*="filter"], [aria-label*="sidebar"], [aria-label*="menu"], ' +
+                '[class*="sidebar"], [class*="filter"], [class*="nav"]'
+            ).forEach(el => el.remove());
+            return clone.innerText;
+        }""")
+        if cleaned and len(cleaned.strip()) > 200:
+            return norm(cleaned)
+    except Exception:
+        pass
+    return full_body  # last resort
+
+
 def scrape_detail(page, href, source_url):
     """Scrape a detail page; return row dict or None if filtered out."""
     try:
@@ -142,15 +182,22 @@ def scrape_detail(page, href, source_url):
     except Exception:
         body = ""
 
+    # Use targeted content (no sidebar) for all filtering decisions
+    content = _main_content(page, body)
+
     opp_type = get(page, "[class*='type'],[class*='Type'],.badge,.tag,[class*='category']")
     if opp_type and "grant" not in opp_type.lower():
         sidebar = get(page, "aside,.tender-sidebar,.summary,[class*='summary'],[class*='details'],.metadata")
-        if "grant" not in sidebar.lower() and "grant" not in body[:2000].lower(): return None
+        if "grant" not in sidebar.lower() and "grant" not in content[:2000].lower(): return None
 
     geo = get(page, "[class*='location'],[class*='Location'],[class*='country'],[class*='Country'],[class*='region']")
-    mena_hits = matches(geo + " " + body[:3000], MENA_COUNTRIES)
+
+    # Check geo field first (most reliable — it's the tender's structured country/region metadata).
+    # Fall back to content if geo field is empty or yields no match.
+    # matches() now uses word boundaries, so "relevant" no longer triggers "Levant".
+    mena_hits = matches(geo, MENA_COUNTRIES) or matches(content[:4000], MENA_COUNTRIES)
     if not mena_hits: return None
-    kw_hits = matches(body, KEYWORDS)
+    kw_hits = matches(content, KEYWORDS)
     if not kw_hits: return None
 
     m = re.search(r"/tenders/(\d+)", href)
