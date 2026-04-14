@@ -197,7 +197,40 @@ async def scrape():
                     # ✅ CAPTURE FULL TEXT FOR SUMMARIZER LATER
                     content = await page.inner_text("body", timeout=10000)
 
-                    mena_matches = contains_mena(content)
+                    # The EU portal sidebar lists ALL geographic filter labels
+                    # ("Levant", "North Africa", etc.) on every detail page,
+                    # causing false MENA matches when we search the full body.
+                    #
+                    # Fix: use JS to clone the DOM, remove every navigation /
+                    # sidebar / complementary element by semantic role and tag
+                    # (not fragile class names), then return the cleaned text.
+                    # Falls back to full body only if the result is too short.
+                    try:
+                        search_text = await page.evaluate("""() => {
+                            // Prefer a semantic main-content element
+                            const main = document.querySelector(
+                                'main, [role="main"], article, #content'
+                            );
+                            if (main && main.innerText.trim().length > 200) {
+                                return main.innerText;
+                            }
+                            // Fallback: clone body and strip navigation / sidebar elements
+                            const clone = document.body.cloneNode(true);
+                            clone.querySelectorAll(
+                                'nav, header, footer, aside, ' +
+                                '[role="navigation"], [role="complementary"], [role="banner"], ' +
+                                '[role="search"], [role="menubar"], ' +
+                                '[aria-label*="filter"], [aria-label*="navigation"], ' +
+                                '[aria-label*="sidebar"], [aria-label*="menu"]'
+                            ).forEach(el => el.remove());
+                            return clone.innerText;
+                        }""")
+                        if not search_text or len(search_text.strip()) < 100:
+                            search_text = content
+                    except Exception:
+                        search_text = content
+
+                    mena_matches = contains_mena(search_text)
                     if not mena_matches:
                         print("❌ REJECTED: No MENA match")
                         await page.go_back(wait_until="domcontentloaded", timeout=10000)
@@ -206,7 +239,7 @@ async def scrape():
                     else:
                         print(f"✅ MENA: {mena_matches}")
 
-                    keyword_matches = find_keywords(content)
+                    keyword_matches = find_keywords(search_text)
                     if not keyword_matches:
                         print("❌ REJECTED: No keyword match")
                         await page.go_back(wait_until="domcontentloaded", timeout=10000)
