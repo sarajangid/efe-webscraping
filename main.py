@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
-from upload_to_sharepoint import process_uploads
+from upload_to_sharepoint import process_uploads, download_excel, download_docs
 
 scrapers = [
     "attempt2.py",
@@ -89,6 +89,22 @@ with open(_error_log_path, "w", encoding="utf-8") as log:
     log.write("=" * 60 + "\n\n")
 
 try:
+    print("\n" + "=" * 70)
+    print("DOWNLOADING EXISTING EXCEL FROM SHAREPOINT")
+    print("=" * 70)
+    if download_excel():
+        print("[DEBUG] Grants.xlsx downloaded successfully from SharePoint.")
+    else:
+        print("[DEBUG] Grants.xlsx not found on SharePoint — will create on first upload.")
+
+    print("\n" + "=" * 70)
+    print("DOWNLOADING EXISTING DOCS FROM SHAREPOINT")
+    print("=" * 70)
+    if download_docs():
+        print("[DEBUG] Grants_docs.zip downloaded and unzipped successfully.")
+    else:
+        print("[DEBUG] Grants_docs.zip not found on SharePoint — will create on first upload.")
+
     for scraper in scrapers:
         print(f"\n{'=' * 70}")
         print(f"RUNNING {scraper}")

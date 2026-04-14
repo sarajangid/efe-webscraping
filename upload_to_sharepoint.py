@@ -157,6 +157,32 @@ def download_documents_helper(BASE_DOWNLOAD_DIR, BASE_DOMAIN, grant_name, docume
             print("Download error:", e)
 
 
+def download_from_onedrive(TOKEN, remote_path, local_path):
+    """Download a file from SharePoint/OneDrive to a local path.
+
+    Returns True if the file was downloaded, False if it doesn't exist yet
+    (e.g. first-ever run), and raises on any other error.
+    """
+    site_id = _sharepoint_env()["SITE_ID"]
+    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{remote_path}:/content"
+
+    headers = {"Authorization": f"Bearer {TOKEN}"}
+    r = requests.get(url, headers=headers, allow_redirects=True)
+
+    if r.status_code == 404:
+        print(f"No existing file at {remote_path} — will create on first upload.")
+        return False
+
+    if r.status_code not in [200, 302]:
+        raise RuntimeError(f"Download failed ({r.status_code}): {r.text}")
+
+    os.makedirs(os.path.dirname(os.path.abspath(local_path)), exist_ok=True)
+    with open(local_path, "wb") as f:
+        f.write(r.content)
+    print(f"Downloaded {remote_path} → {local_path}")
+    return True
+
+
 def upload_to_onedrive(TOKEN, local_path, remote_path):
     site_id = _sharepoint_env()["SITE_ID"]
     url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{remote_path}:/content"
@@ -194,6 +220,48 @@ def download_documents(
         )
 
 
+
+
+def download_excel():
+    """Download the existing Grants.xlsx from SharePoint to the local EXCEL_FILE path.
+
+    Call this before running scrapers so they can dedup against existing data.
+    Does nothing (and doesn't raise) if the file doesn't exist on SharePoint yet.
+    """
+    cfg = _sharepoint_env()
+    TOKEN = get_access_token()
+    return download_from_onedrive(
+        TOKEN,
+        f"{cfg['ONEDRIVE_FOLDER']}/Grants.xlsx",
+        cfg["EXCEL_FILE"],
+    )
+
+
+def download_docs():
+    """Download Grants_docs.zip from SharePoint and unzip it to BASE_DOWNLOAD_DIR.
+
+    Call this before running scrapers so previously downloaded PDFs are restored
+    and download_documents_helper skips files that already exist.
+    Does nothing (and doesn't raise) if the zip doesn't exist on SharePoint yet.
+    """
+    cfg = _sharepoint_env()
+    dir_key = "BASE_DOWNLOAD_DIR"
+    if not os.getenv(dir_key):
+        raise RuntimeError(
+            f"{dir_key} must be set (environment or .env) for doc downloads."
+        )
+    DIR = os.environ[dir_key]
+    TOKEN = get_access_token()
+    downloaded = download_from_onedrive(
+        TOKEN,
+        f"{cfg['ONEDRIVE_FOLDER']}/Grants_docs.zip",
+        "Grants_docs.zip",
+    )
+    if downloaded:
+        os.makedirs(DIR, exist_ok=True)
+        shutil.unpack_archive("Grants_docs.zip", DIR)
+        print(f"Unzipped docs to {DIR}")
+    return downloaded
 
 
 def process_uploads():
