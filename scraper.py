@@ -42,6 +42,42 @@ ONEDRIVE_FOLDER = "Grants"
 
 os.makedirs(BASE_DOWNLOAD_DIR, exist_ok=True)
 
+# Keep only grants from these agencies/offices.
+ALLOWED_AGENCIES = {
+    "Bureau of Africa Regional Services",
+    "Assistance Coordination",
+    "Bureau of African Affairs",
+    "Bureau of Democracy Human Rights and Labor",
+    "Bureau of Economic and Business Affairs",
+    "Office of Global Women's Issues",
+    "Office of the Middle East Partnership Initiative",
+    "Bureau of Educational and Cultural Affairs",
+    "Bureau of Population Refugees and Migration",
+    "Bureau of Disaster and Humanitarian Response",
+    "Bureau of Near Eastern Affairs",
+    "Bureau of Global Public Affairs",
+    "Iraq Assistance Office",
+    "US Mission to Algeria",
+    "US Mission to Bahrain",
+    "US Mission to Egypt",
+    "US Mission to Iraq",
+    "US Mission to Israel",
+    "US Mission to Jerusalem",
+    "US Mission to Jordan",
+    "US Mission to Kuwait",
+    "US Mission to Lebanon",
+    "US Mission to Libya",
+    "US Mission to Mauritania",
+    "US Mission to Morocco",
+    "US Mission to Oman",
+    "US Mission to Qatar",
+    "US Mission to Saudi Arabia",
+    "US Mission to Tunisia",
+    "US Mission to United Arab Emirates",
+    "Bureau of International Labor Affairs",
+    "Millennium Challenge Corporation",
+}
+
 
 ############################
 # COLLECT SEARCH LINKS
@@ -227,6 +263,8 @@ for detail_link in links:
 
         if p_tag:
             agency = p_tag.get_text(strip=True).replace("Agency:", "").strip()
+        if agency not in ALLOWED_AGENCIES:
+            continue
 
         deadline = None
 
