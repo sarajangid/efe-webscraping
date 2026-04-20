@@ -17,10 +17,11 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from summarizer import generate_simpler_summary
 import os
 from dotenv import load_dotenv
+from datetime import datetime
+
 
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
-from datetime import datetime
 
 logging.basicConfig(
     level=logging.INFO,

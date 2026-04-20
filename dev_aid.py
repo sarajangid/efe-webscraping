@@ -5,6 +5,7 @@ from reqs import *
 from summarizer import generate_sam_summary
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
@@ -50,6 +51,16 @@ DEFAULT_WIDTHS = {
     "Grant Link": 45,
     "Deadline": 18,
 }
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 def _auto_width(header: str) -> float:
     header = (header or "").strip()
@@ -304,6 +315,8 @@ def run(max_pages=10, headless=True):
             df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
     # Drop the temporary _opp_data column
     df = df.drop(columns=["_opp_data"])
+    
+    df = df[df["Application Deadline"].apply(is_not_expired)]  
 
     print(f"\n{'='*50}\n  Done — {len(df)} matching rows\n{'='*50}\n")
     pd.set_option("display.max_columns", None)
