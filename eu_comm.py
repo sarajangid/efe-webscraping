@@ -7,11 +7,26 @@ from urllib.parse import urljoin
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 import os
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+from reqs import *
+from datetime import datetime
 
 BASE_URL = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/calls-for-proposals"
 
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
+
+def norm(text):
+    return re.sub(r"\s+", " ", text or "").strip()
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -343,6 +358,9 @@ async def scrape():
             # but passing the DF directly is safer.
             final_columns = [c for c in COLUMNS if c != "Full_Description"]
             df = df[final_columns]
+        
+        df = df[df["Application Deadline"].apply(is_not_expired)]
+        print("Filtered expired deadlines.")
 
         if os.path.exists(EXCEL_FILE):
             if SHEET_NAME in pd.ExcelFile(EXCEL_FILE).sheet_names:
@@ -363,11 +381,17 @@ async def scrape():
             print("Created new Excel file")
 
         apply_impact_formatting(EXCEL_FILE, SHEET_NAME)
+        
+        print(f"\n{'='*50}\n  Done — {len(df)} matching rows\n{'='*50}\n")
+        pd.set_option("display.max_columns", None)
+        pd.set_option("display.max_colwidth", 60)
+        pd.set_option("display.width", 220)
+        print(df.to_string(index=False))        
+        
         return df
     else:
         print("\n⚠️ No data collected. Check filters or website structure.")
         return pd.DataFrame(columns=COLUMNS)
-
 
 if __name__ == "__main__":
     asyncio.run(scrape())

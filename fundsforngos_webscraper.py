@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
+from datetime import datetime
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +67,15 @@ HEADERS = {
 }
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 def get_soup(url, session, retries=3):
     """Fetch a URL and return a BeautifulSoup object, with retries."""
@@ -346,6 +356,9 @@ def main():
         return
 
     df = pd.DataFrame(all_grants)
+    
+    #filter expired deadlines
+    df = df[df["deadline"].apply(is_not_expired)]
 
     SHEET_NAME = "Funds for NGOs"
 
