@@ -10,6 +10,7 @@ from reqs import *
 from summarizer import generate_sam_summary
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 EXCEL_FILE = os.environ["EXCEL_FILE"]
@@ -55,6 +56,16 @@ DEFAULT_WIDTHS = {
     "Grant Link": 45,
     "Deadline": 18,
 }
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 def _auto_width(header: str) -> float:
     header = (header or "").strip()

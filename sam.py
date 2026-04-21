@@ -10,6 +10,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -52,6 +53,16 @@ SECTOR_MAP = {
         "business association", "chamber of commerce", "industry federation", "private sector development"
     },
 }
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 def extract_mena(text):
     found = set()
@@ -277,6 +288,12 @@ def main():
     df = df.drop(columns=["_opp_data"])
 
     print(f"\nDone. Total opportunities: {len(df)}")
+    
+    # ── Filter expired deadlines ──────────────────────────────
+    df = df[df["Application Deadline"].apply(is_not_expired)]
+    print(f"After deadline filter: {len(df)} remaining.")
+    # ─────────────────────────────────────────────────────────
+    
     print(df)
 
     SHEET_NAME = "sam"
