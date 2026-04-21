@@ -130,8 +130,23 @@ def find_keywords(text):
     text_lower = text.lower()
     return [kw for kw in KEYWORDS if kw.lower() in text_lower]
 
+TARGET_NEW_ENTRIES = 5
+
 async def scrape():
     rows = []
+
+    # Load existing links from Excel to avoid duplicates
+    SHEET_NAME = "eu_comm"
+    existing_links = set()
+    if os.path.exists(EXCEL_FILE):
+        try:
+            if SHEET_NAME in pd.ExcelFile(EXCEL_FILE).sheet_names:
+                existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+                if "Original Link" in existing_df.columns:
+                    existing_links = set(existing_df["Original Link"].dropna())
+                    print(f"📋 Loaded {len(existing_links)} existing links from Excel")
+        except Exception as e:
+            print(f"⚠️ Could not load existing links: {e}")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -145,81 +160,73 @@ async def scrape():
         page = await context.new_page()
 
         print("🌐 Opening page...")
-        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_load_state("networkidle", timeout=30000)
+        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
 
-        for page_num in range(10):
-            print(f"\n🔎 Scraping page {page_num + 1}\n")
+        done = False
+        for page_num in range(3):
+            if done:
+                break
+            print(f"\n🔎 Scraping page {page_num + 1}/3\n")
 
-            for i in range(50):  # ✅ FIX: Dynamic card iteration instead of pre-fetching
+            try:
+                await page.wait_for_selector('div:has-text("Deadline")', timeout=10000, state="attached")
+            except PlaywrightTimeout:
+                print("❌ Timed out waiting for cards — stopping.")
+                break
+
+            cards = page.locator("div").filter(has_text="Deadline")
+            count = await cards.count()
+            print(f"   Found {count} cards on this page")
+
+            for i in range(count):
+                if done:
+                    break
                 try:
-                    # ✅ FIX: Re-fetch cards list on every iteration to avoid stale references
-                    await page.wait_for_selector('div:has-text("Deadline")', timeout=10000, state="attached")
-                    cards = page.locator("div").filter(has_text="Deadline")
-                    count = await cards.count()
-                    
-                    if i >= count:
-                        print(f"ℹ️ Reached end of cards ({count}) on page {page_num + 1}")
-                        break
-                        
                     card = cards.nth(i)
-                    
-                    if not await card.is_visible(timeout=5000):
-                        print(f"️ Card {i+1} no longer visible, skipping")
-                        continue
-                        
-                    text = await card.inner_text(timeout=10000)
+                    text = await card.inner_text(timeout=5000)
                     print(f"\n---\n📌 Card {i+1}")
 
                     link_el = card.locator("a").first
                     if not await link_el.count():
-                        print("❌ REJECTED: No link element found")
+                        print("❌ REJECTED: No link")
                         continue
-                        
-                    link = await link_el.get_attribute("href", timeout=10000)
+
+                    link = await link_el.get_attribute("href", timeout=5000)
                     if not link:
-                        print("❌ REJECTED: No href attribute")
+                        print("❌ REJECTED: No href")
                         continue
 
                     full_link = urljoin(BASE_URL, link)
-                    print(f"🔗 Navigating to: {full_link[:80]}...")
 
-                    try:
-                        await page.goto(full_link, wait_until="domcontentloaded", timeout=30000)
-                        await page.wait_for_load_state("networkidle", timeout=15000)
-                    except PlaywrightTimeout:
-                        print(f"⚠️ Navigation timeout for {full_link}, trying to continue...")
-                    except Exception as e:
-                        print(f"❌ Navigation error: {e}")
-                        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+                    if full_link in existing_links:
+                        print(f"⏭️ Already in Excel, skipping")
                         continue
 
-                    # ✅ CAPTURE FULL TEXT FOR SUMMARIZER LATER
-                    content = await page.inner_text("body", timeout=10000)
+                    print(f"🔗 Opening: {full_link[:80]}...")
 
-                    # The EU portal sidebar lists ALL geographic filter labels
-                    # ("Levant", "North Africa", etc.) on every detail page,
-                    # causing false MENA matches when we search the full body.
-                    #
-                    # Fix: use JS to clone the DOM, remove every navigation /
-                    # sidebar / complementary element by semantic role and tag
-                    # (not fragile class names), then return the cleaned text.
-                    # Falls back to full body only if the result is too short.
+                    # Open detail page in a new tab — listing page stays loaded
+                    detail_page = await context.new_page()
                     try:
-                        search_text = await page.evaluate("""() => {
-                            // Prefer a semantic main-content element
-                            const main = document.querySelector(
-                                'main, [role="main"], article, #content'
-                            );
-                            if (main && main.innerText.trim().length > 200) {
-                                return main.innerText;
-                            }
-                            // Fallback: clone body and strip navigation / sidebar elements
+                        await detail_page.goto(full_link, wait_until="domcontentloaded", timeout=15000)
+                    except PlaywrightTimeout:
+                        print("⚠️ Detail page timeout, skipping")
+                        await detail_page.close()
+                        continue
+                    except Exception as e:
+                        print(f"❌ Navigation error: {e}")
+                        await detail_page.close()
+                        continue
+
+                    content = await detail_page.inner_text("body", timeout=8000)
+
+                    try:
+                        search_text = await detail_page.evaluate("""() => {
+                            const main = document.querySelector('main, [role="main"], article, #content');
+                            if (main && main.innerText.trim().length > 200) return main.innerText;
                             const clone = document.body.cloneNode(true);
                             clone.querySelectorAll(
-                                'nav, header, footer, aside, ' +
-                                '[role="navigation"], [role="complementary"], [role="banner"], ' +
-                                '[role="search"], [role="menubar"], ' +
+                                'nav, header, footer, aside, [role="navigation"], [role="complementary"], ' +
+                                '[role="banner"], [role="search"], [role="menubar"], ' +
                                 '[aria-label*="filter"], [aria-label*="navigation"], ' +
                                 '[aria-label*="sidebar"], [aria-label*="menu"]'
                             ).forEach(el => el.remove());
@@ -230,33 +237,25 @@ async def scrape():
                     except Exception:
                         search_text = content
 
+                    await detail_page.close()
+
                     mena_matches = contains_mena(search_text)
                     if not mena_matches:
                         print("❌ REJECTED: No MENA match")
-                        await page.go_back(wait_until="domcontentloaded", timeout=10000)
-                        await page.wait_for_load_state("networkidle", timeout=5000)
                         continue
-                    else:
-                        print(f"✅ MENA: {mena_matches}")
+                    print(f"✅ MENA: {mena_matches}")
 
                     keyword_matches = find_keywords(search_text)
                     if not keyword_matches:
                         print("❌ REJECTED: No keyword match")
-                        await page.go_back(wait_until="domcontentloaded", timeout=10000)
-                        await page.wait_for_load_state("networkidle", timeout=5000)
                         continue
-                    else:
-                        print(f"✅ Keywords: {keyword_matches}")
+                    print(f"✅ Keywords: {keyword_matches}")
 
-                    print(" ACCEPTED")
-
-                    # ✅ FIX: re module now available for regex
                     deadline = ""
                     deadline_match = re.search(r'Deadline[:\s]+([^\n]+)', text, re.I)
                     if deadline_match:
                         deadline = deadline_match.group(1).strip()
 
-                    # ✅ ADDED: Store full description for later summarization
                     rows.append({
                         "Opportunity ID": "",
                         "Title": text.split("\n")[0].strip(),
@@ -264,40 +263,44 @@ async def scrape():
                         "Matched Keywords": ", ".join(keyword_matches),
                         "Geographic Area": ", ".join(mena_matches),
                         "Original Link": full_link,
-                        "Full_Description": content, # Saved here for AI
-                        "AI Summary": "" # Placeholder
+                        "Full_Description": content,
+                        "AI Summary": ""
                     })
+                    existing_links.add(full_link)
+                    print(f"✅ New entry {len(rows)}/{TARGET_NEW_ENTRIES} collected")
 
-                    await page.go_back(wait_until="domcontentloaded", timeout=15000)
-                    await page.wait_for_load_state("networkidle", timeout=5000)
-                    
+                    if len(rows) >= TARGET_NEW_ENTRIES:
+                        print(f"\n🎯 Reached {TARGET_NEW_ENTRIES} new entries — stopping.")
+                        done = True
+                        break
+
                 except Exception as e:
-                    print(f"❌ Error processing card: {e}")
-                    try:
-                        if page.url != BASE_URL:
-                            await page.go_back(timeout=10000)
-                            await page.wait_for_load_state("networkidle", timeout=5000)
-                    except:
-                        await page.goto(BASE_URL, timeout=30000)
+                    print(f"❌ Error processing card {i+1}: {e}")
                     continue
+
+            if done:
+                break
 
             # Pagination
             print("🔄 Checking for next page...")
             next_button = page.locator("button:has-text('Next'):not(:disabled)")
-            
-            if await next_button.count() > 0 and await next_button.is_visible(timeout=5000):
+            if await next_button.count() > 0 and await next_button.is_visible(timeout=3000):
                 print("➡️ Moving to next page...")
                 try:
-                    await next_button.click(timeout=10000)
-                    await page.wait_for_load_state("networkidle", timeout=30000)
+                    await next_button.click(timeout=5000)
+                    await page.wait_for_selector('div:has-text("Deadline")', timeout=10000, state="attached")
                 except Exception as e:
-                    print(f"⚠️ Could not click next: {e}")
+                    print(f"⚠️ Could not go to next page: {e}")
                     break
             else:
-                print("⛔ No more pages or next button not found")
+                print("⛔ No more pages")
                 break
 
         await browser.close()
+
+    if not rows:
+        print("\n⚠️ No new grants found in the first 3 pages.")
+        return pd.DataFrame(columns=COLUMNS)
     
     if rows:
         print(f"\n🤖 Starting AI Summarization for {len(rows)} opportunities...")

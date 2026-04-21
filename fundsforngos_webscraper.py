@@ -338,7 +338,13 @@ def main():
 
             if info:
                 logger.info(f"  Generating AI summary...")
-                info['ai_summary'] = generate_simpler_summary(info.get('summary', ''))
+                summary_input = "\n".join(filter(None, [
+                    info.get('title', ''),
+                    info.get('donor', ''),
+                    info.get('summary', ''),
+                    info.get('deadline', ''),
+                ]))
+                info['ai_summary'] = generate_simpler_summary(summary_input)
                 all_grants.append(info)
 
     if not all_grants:

@@ -264,7 +264,7 @@ async def _run_async(max_pages, headless):
     return pd.DataFrame(rows, columns=COLUMNS) if rows else pd.DataFrame(columns=COLUMNS)
 
 
-def run(max_pages=10, headless=True):
+def run(max_pages=2, headless=True):
     start = time.time()
     df = asyncio.run(_run_async(max_pages, headless))
 
@@ -296,7 +296,7 @@ def run(max_pages=10, headless=True):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="SAM.gov MENA grant scraper")
-    p.add_argument("--pages", type=int, default=10, help="Pages per keyword (default: 10)")
+    p.add_argument("--pages", type=int, default=2, help="Pages per keyword (default: 2)")
     p.add_argument("--headless", action="store_true", help="Run headless")
     args = p.parse_args()
     print(f"{ts()} Pages: {args.pages} | Headless: {args.headless}")

@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 """
 ai_summary.py
-Generates AI summaries for grant entries using Google Gemini.
-Requires GEMINI_API_KEY in a .env file or environment variable.
+Generates AI summaries for grant entries using OpenAI.
+Requires OPEN_AI_API_KEY in a .env file or environment variable.
 """
 
 # Current Issues: sam is too slow, simpler is not working, rate limits and quotas are being exceeded
-# Fixes: might need to buy better tier or switch 
+# Fixes: might need to buy better tier or switch
 
 import os
 import re
 import time
 from dotenv import load_dotenv
-from google import genai
+from openai import OpenAI
+
 
 load_dotenv()
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+client = OpenAI(api_key=os.environ["OPEN_AI_API_KEY"])
 
-# IMPACT FUNDING 
+# IMPACT FUNDING
 def generate_summary(grant: dict) -> str:
     description = grant.get("description", "").strip()
 
@@ -40,21 +41,19 @@ def generate_summary(grant: dict) -> str:
     for attempt in range(3):
         print("Starting Attempt ", attempt)
         try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
             )
-            return response.text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             msg = str(e)
-            delay = re.search(r"retryDelay.*?(\d+)s", msg)
-            wait = int(delay.group(1)) + 2 if delay else 60
-            print(f"    [WARN] Gemini rate limit hit, retrying in {wait}s (attempt {attempt+1}/3)...")
-            time.sleep(wait)
-    return description 
+            print(f"    [WARN] OpenAI error, retrying in 60s (attempt {attempt+1}/3): {msg}")
+            time.sleep(60)
+    return description
 
 
-# SIMPLER GRANTS 
+# SIMPLER GRANTS
 
 def generate_simpler_summary(text):
     if not text or len(text.strip()) < 50:
@@ -70,15 +69,11 @@ Grant description:
 """
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
         )
-
-        if response and response.text:
-            return response.text.strip()
-        else:
-            return ""
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         print("AI summary error:", e)
@@ -87,7 +82,7 @@ Grant description:
 
 
 
-# DARPE 
+# DARPE
 
 def generate_darpe_summary(text):
 
@@ -103,20 +98,16 @@ Text:
 """
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
         )
-
-        if response and response.text:
-            return response.text.strip()
-
-        return ""
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         print("AI summary error:", e)
         return ""
-    
+
 
 # SAM.GOV (SLOW)
 def generate_sam_summary(opportunity: dict) -> str:
@@ -153,17 +144,14 @@ Text:
 
     for attempt in range(3):
         try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
             )
-            if response and response.text:
-                return response.text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             msg = str(e)
-            delay = re.search(r"retryDelay.*?(\d+)s", msg)
-            wait = int(delay.group(1)) + 2 if delay else 60
-            print(f"    [WARN] Gemini rate limit hit, retrying in {wait}s (attempt {attempt+1}/3)...")
-            time.sleep(wait)
+            print(f"    [WARN] OpenAI error, retrying in 60s (attempt {attempt+1}/3): {msg}")
+            time.sleep(60)
 
     return text_to_summarize

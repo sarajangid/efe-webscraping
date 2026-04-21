@@ -1,5 +1,10 @@
-import argparse, re, time
+import argparse
+import re
+import time
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 from reqs import *
 from summarizer import generate_sam_summary
@@ -109,25 +114,31 @@ def parse_amount(text):
     nums = [a.replace(",", "") for a in re.findall(r"[\$€£]?\s*([\d,]+(?:\.\d+)?)", text or "")]
     return ("", "") if not nums else (nums[0], nums[0]) if len(nums) == 1 else (nums[0], nums[-1])
 
+DETAIL_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+}
+
+def bs_get(soup, *selectors):
+    for sel in selectors:
+        el = soup.select_one(sel)
+        if el:
+            return norm(el.get_text(" "))
+    return ""
+
 def get(page, sel):
     el = page.query_selector(sel)
     return norm(el.inner_text()) if el else ""
 
 def get_links(page):
     """Return deduplicated list of {href, surface} dicts from a listing page."""
-    cards = (
-        page.query_selector_all(
-            "div.tender-item, article.tender-card, .search-results .item, "
-            "[class*='TenderCard'], li.result-item, .result-list > div"
-        ) or page.query_selector_all("a[href*='/tenders/']")
-    )
+    cards = page.query_selector_all("a[href*='/tenders/']")
     print(f"  Found {len(cards)} cards")
     seen, out = set(), []
     for card in cards:
         try:
-            el = card.query_selector("a[href*='/tenders/']") or card
-            href = el.get_attribute("href") or ""
-            if "/tenders/" not in href or href in seen: continue
+            href = card.get_attribute("href") or ""
+            if not re.search(r"/tenders/(?:view/|)\d+", href) or href in seen:
+                continue
             if not href.startswith("http"): href = "https://www.developmentaid.org" + href
             seen.add(href)
             out.append({"href": href, "surface": norm(card.inner_text())})
@@ -135,82 +146,48 @@ def get_links(page):
             continue
     return out
 
-def _main_content(page, full_body):
-    """Return the main content text of the page, excluding nav/sidebar elements.
-    DevelopmentAid sidebars list all geographic filter labels as whole words
-    (e.g. "Jordan", "Lebanon"), which pollute MENA matching if we search the
-    full body.  We try semantic selectors first, then fall back to JS DOM
-    surgery (clone + strip nav/aside), then fall back to the raw body."""
-    for sel in ("main", "[role='main']", "article",
-                "[class*='tender-detail']", "[class*='tender-body']",
-                "[class*='detail-content']", "[class*='opportunity-detail']"):
-        try:
-            candidate = norm(page.inner_text(sel))
-            if candidate and len(candidate) > 200:
-                return candidate
-        except Exception:
-            continue
+def scrape_detail(href, source_url):
+    """Fetch a detail page with requests+BS4; return row dict or None if filtered out."""
+    time.sleep(1)
     try:
-        cleaned = page.evaluate("""() => {
-            const clone = document.body.cloneNode(true);
-            clone.querySelectorAll(
-                'nav, header, footer, aside, ' +
-                '[role="navigation"], [role="complementary"], [role="banner"], ' +
-                '[aria-label*="filter"], [aria-label*="sidebar"], [aria-label*="menu"], ' +
-                '[class*="sidebar"], [class*="filter"], [class*="nav"]'
-            ).forEach(el => el.remove());
-            return clone.innerText;
-        }""")
-        if cleaned and len(cleaned.strip()) > 200:
-            return norm(cleaned)
-    except Exception:
-        pass
-    return full_body  # last resort
-
-
-def scrape_detail(page, href, source_url):
-    """Scrape a detail page; return row dict or None if filtered out."""
-    try:
-        page.goto(href, wait_until="domcontentloaded", timeout=30_000)
-        page.wait_for_timeout(3000)
-    except PwTimeout:
-        print(f"    [WARN] Timeout: {href}")
+        resp = requests.get(href, headers=DETAIL_HEADERS, timeout=25)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"    [WARN] Request failed {href}: {e}")
         return None
 
-    try:
-        body = norm(page.inner_text("body"))
-    except Exception:
-        body = ""
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Use targeted content (no sidebar) for all filtering decisions
-    content = _main_content(page, body)
+    # Strip nav/sidebar so geo matching isn't polluted by filter labels
+    for el in soup.select("nav, header, footer, aside, [class*='sidebar'], [class*='filter'], [class*='nav']"):
+        el.decompose()
 
-    opp_type = get(page, "[class*='type'],[class*='Type'],.badge,.tag,[class*='category']")
-    if opp_type and "grant" not in opp_type.lower():
-        sidebar = get(page, "aside,.tender-sidebar,.summary,[class*='summary'],[class*='details'],.metadata")
-        if "grant" not in sidebar.lower() and "grant" not in content[:2000].lower(): return None
+    main = soup.select_one("main, [role='main'], article, [class*='tender-detail'], [class*='tender-body'], [class*='detail-content']")
+    content = norm(main.get_text(" ")) if main and len(main.get_text()) > 200 else norm(soup.get_text(" "))
 
-    geo = get(page, "[class*='location'],[class*='Location'],[class*='country'],[class*='Country'],[class*='region']")
+    opp_type = bs_get(soup, "[class*='type']", "[class*='Type']", ".badge", ".tag", "[class*='category']")
+    if opp_type and "grant" not in opp_type.lower() and "grant" not in content[:2000].lower():
+        return None
 
-    # Check geo field first (most reliable — it's the tender's structured country/region metadata).
-    # Fall back to content if geo field is empty or yields no match.
-    # matches() now uses word boundaries, so "relevant" no longer triggers "Levant".
+    geo = bs_get(soup, "[class*='location']", "[class*='Location']", "[class*='country']", "[class*='Country']", "[class*='region']")
     mena_hits = matches(geo, MENA_COUNTRIES) or matches(content[:4000], MENA_COUNTRIES)
-    if not mena_hits: return None
+    if not mena_hits:
+        return None
+
     kw_hits = matches(content, KEYWORDS)
-    if not kw_hits: return None
+    if not kw_hits:
+        return None
 
     m = re.search(r"/tenders/(\d+)", href)
     opp_id = m.group(1) if m else re.sub(r"\W", "", href)[-12:]
-    amt_min, amt_max = parse_amount(
-        get(page, "[class*='amount'],[class*='Amount'],[class*='budget'],[class*='Budget'],[class*='funding']")
-    )
 
-    title = get(page, "h1,[class*='title'] h1,[class*='Title']") or "N/A"
-    donor = get(page, "[class*='donor'],[class*='Donor'],[class*='funder'],[class*='client'],[class*='organisation']")
-    sector = get(page, "[class*='sector'],[class*='Sector'],[class*='focus'],[class*='theme']")
-    eligibility = get(page, "[class*='eligib'],[class*='Eligib'],[class*='applicant'],[class*='eligible']")
-    deadline = get(page, "[class*='deadline'],[class*='Deadline'],[class*='closing'],time[datetime]")
+    title       = bs_get(soup, "h1", "[class*='title'] h1", "[class*='Title']") or "N/A"
+    donor       = bs_get(soup, "[class*='donor']", "[class*='Donor']", "[class*='funder']", "[class*='client']", "[class*='organisation']")
+    sector      = bs_get(soup, "[class*='sector']", "[class*='Sector']", "[class*='focus']", "[class*='theme']")
+    eligibility = bs_get(soup, "[class*='eligib']", "[class*='Eligib']", "[class*='applicant']", "[class*='eligible']")
+    deadline    = bs_get(soup, "[class*='deadline']", "[class*='Deadline']", "[class*='closing']", "time[datetime]")
+    date_posted = bs_get(soup, "[class*='posted']", "[class*='Published']", "[class*='published']", "time")
+    amt_min, amt_max = parse_amount(bs_get(soup, "[class*='amount']", "[class*='Amount']", "[class*='budget']", "[class*='Budget']", "[class*='funding']"))
 
     return {
         "Opportunity ID":       opp_id,
@@ -226,25 +203,22 @@ def scrape_detail(page, href, source_url):
         "Matched Keywords":     "; ".join(kw_hits),
         "Source Link":          source_url,
         "Original Link":        href,
-        "Date Posted":          get(page, "[class*='posted'],[class*='Published'],[class*='published'],time"),
-        # Placeholder for AI summary - will be generated in batch after filtering
+        "Date Posted":          date_posted,
         "AI Summary":           None,
-        # Store raw data for AI summary generation
         "_opp_data":            {
-            "Title": title,
-            "Donor Name": donor,
+            "Title": title, "Donor Name": donor,
             "Geographic Area": geo or ", ".join(mena_hits),
-            "Focus / Sector": sector,
-            "Eligibility": eligibility,
-            "Amount Max (USD)": amt_max,
-            "Application Deadline": deadline,
+            "Focus / Sector": sector, "Eligibility": eligibility,
+            "Amount Max (USD)": amt_max, "Application Deadline": deadline,
         },
     }
 
-def run(max_pages=10, headless=True):
+def run(max_pages=2, headless=True):
     df = pd.DataFrame(columns=COLUMNS)
     seen_ids, seen_links = set(), set()
+    all_entries = []  # (href, source_url)
 
+    # Phase 1: use Playwright only to collect grant links from listing pages
     with sync_playwright() as pw:
         ctx = pw.chromium.launch(
             headless=headless,
@@ -253,18 +227,17 @@ def run(max_pages=10, headless=True):
             viewport={"width": 1280, "height": 900},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         )
-        lp, dp = ctx.new_page(), ctx.new_page()
+        lp = ctx.new_page()
 
         for pn in range(1, max_pages + 1):
             print(f"\n{'='*50}\n  PAGE {pn}/{max_pages}\n{'='*50}")
             source = BASE_URL + f"&page={pn}"
             try:
-                lp.goto(source, wait_until="domcontentloaded", timeout=30_000)
-                lp.wait_for_timeout(4000)
+                lp.goto(source, wait_until="domcontentloaded", timeout=20_000)
                 lp.wait_for_selector(
                     "div.tender-item,article.tender-card,.search-results .item,"
                     "[class*='tender'],[class*='opportunity'],.card",
-                    timeout=15_000,
+                    timeout=10_000,
                 )
             except PwTimeout:
                 print("  [WARN] Page load timeout, stopping.")
@@ -275,35 +248,52 @@ def run(max_pages=10, headless=True):
                 print("  [INFO] No entries found, end of results.")
                 break
 
-            for i, e in enumerate(entries, 1):
+            for e in entries:
                 href = e["href"]
                 m = re.search(r"/tenders/(\d+)", href)
                 oid = m.group(1) if m else ""
-                print(f"  [{i:02d}/{len(entries)}] {href}")
-                if href in seen_links or (oid and oid in seen_ids):
-                    print("        → Duplicate, skipping.")
-                    continue
+                if href not in seen_links and not (oid and oid in seen_ids):
+                    all_entries.append((href, source))
+                    seen_links.add(href)
+                    if oid:
+                        seen_ids.add(oid)
 
-                row = scrape_detail(dp, href, source)
-                if row is None:
-                    print("        → Filtered out.")
-                    continue
-
-                print(f"        ✓ '{row['Title'][:55]}'\n          KW: {row['Matched Keywords'][:75]}")
-                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-                seen_ids.add(str(row["Opportunity ID"]))
-                seen_links.add(href)
-                time.sleep(0.5)
+            print(f"  Collected {len(entries)} links ({len(all_entries)} total so far)")
 
         ctx.browser.close()
+
+    # Phase 2: fetch all detail pages concurrently with requests
+    print(f"\nFetching {len(all_entries)} detail pages (10 concurrent)...")
+
+    def fetch(args):
+        href, source = args
+        return scrape_detail(href, source)
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(fetch, e): e[0] for e in all_entries}
+        for i, future in enumerate(as_completed(futures), 1):
+            href = futures[future]
+            try:
+                row = future.result()
+            except Exception as e:
+                print(f"  [{i:02d}] ERROR {href}: {e}")
+                continue
+            if row is None:
+                print(f"  [{i:02d}] Filtered out: {href[-60:]}")
+            else:
+                print(f"  [{i:02d}] ✓ {row['Title'][:60]}")
+                rows.append(row)
+
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=COLUMNS)
 
     # Generate AI summaries in batch for all filtered results
     print(f"\nGenerating AI summaries for {len(df)} opportunities...")
     for idx, row in df.iterrows():
         if row.get("_opp_data"):
             df.at[idx, "AI Summary"] = generate_sam_summary(row["_opp_data"])
-    # Drop the temporary _opp_data column
-    df = df.drop(columns=["_opp_data"])
+    if "_opp_data" in df.columns:
+        df = df.drop(columns=["_opp_data"])
 
     print(f"\n{'='*50}\n  Done — {len(df)} matching rows\n{'='*50}\n")
     pd.set_option("display.max_columns", None)
@@ -345,7 +335,7 @@ def run(max_pages=10, headless=True):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="DevelopmentAid MENA grant scraper")
-    p.add_argument("--pages", type=int, default=10, help="Pages to scrape (default: 10)")
+    p.add_argument("--pages", type=int, default=2, help="Pages to scrape (default: 2)")
     p.add_argument("--headless", action="store_true", help="Run headless")
     args = p.parse_args()
     print(f"Pages: {args.pages} | Headless: {args.headless}")
