@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright browsers
 RUN playwright install chromium
 RUN playwright install-deps chromium
+RUN apt-get update && apt-get install -y libreoffice
 
 # Copy your script files
 COPY . .
