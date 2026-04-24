@@ -16,6 +16,7 @@ _SHAREPOINT_ENV_KEYS = (
     "SITE_ID",
     "EXCEL_FILE",
     "ONEDRIVE_FOLDER",
+    "DRIVE_ID"
 )
 
 
@@ -163,8 +164,8 @@ def download_from_onedrive(TOKEN, remote_path, local_path):
     Returns True if the file was downloaded, False if it doesn't exist yet
     (e.g. first-ever run), and raises on any other error.
     """
-    site_id = _sharepoint_env()["SITE_ID"]
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{remote_path}:/content"
+    cfg = _sharepoint_env()
+    url = f"https://graph.microsoft.com/v1.0/sites/{cfg['SITE_ID']}/drives/{cfg['DRIVE_ID']}/root:/{remote_path}:/content"
 
     headers = {"Authorization": f"Bearer {TOKEN}"}
     r = requests.get(url, headers=headers, allow_redirects=True)
@@ -184,8 +185,8 @@ def download_from_onedrive(TOKEN, remote_path, local_path):
 
 
 def upload_to_onedrive(TOKEN, local_path, remote_path):
-    site_id = _sharepoint_env()["SITE_ID"]
-    url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drive/root:/{remote_path}:/content"
+    cfg = _sharepoint_env()
+    url = f"https://graph.microsoft.com/v1.0/sites/{cfg['SITE_ID']}/drives/{cfg['DRIVE_ID']}/root:/{remote_path}:/content"
 
     headers = {
         "Authorization": f"Bearer {TOKEN}",

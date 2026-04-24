@@ -9,13 +9,13 @@ from openpyxl import load_workbook
 from upload_to_sharepoint import process_uploads, download_excel, download_docs
 
 scrapers = [
+    "sam_fast.py",
     "attempt2.py",
     "scraper.py",
     "impact_funding_scraper.py",
     "dev_aid.py",
     "eu_comm.py",
     "fundsforngos_webscraper.py",
-    "sam_fast.py",
 ]
 
 SCRAPER_COMMANDS = {
@@ -97,13 +97,13 @@ try:
     else:
         print("[DEBUG] Grants.xlsx not found on SharePoint — will create on first upload.")
 
-    print("\n" + "=" * 70)
+    '''print("\n" + "=" * 70)
     print("DOWNLOADING EXISTING DOCS FROM SHAREPOINT")
     print("=" * 70)
     if download_docs():
         print("[DEBUG] Grants_docs.zip downloaded and unzipped successfully.")
     else:
-        print("[DEBUG] Grants_docs.zip not found on SharePoint — will create on first upload.")
+        print("[DEBUG] Grants_docs.zip not found on SharePoint — will create on first upload.")'''
 
     for scraper in scrapers:
         print(f"\n{'=' * 70}")
@@ -135,6 +135,7 @@ try:
                     f"--- STDERR ---\n{result.stderr}\n"
                 )
                 print(f"{scraper} failed — details written to {_error_log_path}")
+                print(f"{result.returncode}, STDOUT {result.stdout}, STDERR {result.stderr}")
 
             _print_workbook_state(scraper)
 
@@ -142,6 +143,7 @@ try:
         except subprocess.TimeoutExpired as e:
             _log_error(f"[{scraper}] TIMED OUT\n--- STDOUT ---\n{e.stdout}\n--- STDERR ---\n{e.stderr}\n")
             print(f"{scraper} timed out — details written to {_error_log_path}")
+            print(f"[{scraper}] TIMED OUT\n--- STDOUT ---\n{e.stdout}\n--- STDERR ---\n{e.stderr}\n")
 
     print("\n" + "=" * 70)
     print("STARTING SHAREPOINT UPLOAD")

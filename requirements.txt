@@ -14,7 +14,7 @@ pandas
 openpyxl
 
 # AI/ML
-google-genai
+openai
 
 # Environment
 python-dotenv
