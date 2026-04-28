@@ -387,29 +387,33 @@ def main():
         wb = load_workbook(EXCEL_FILE)
 
         if SHEET_NAME in wb.sheetnames:
-            ws = wb[SHEET_NAME]
-            # Deduplicate by application_link
-            link_col_idx = next(
-                (cell.column for cell in ws[1] if cell.value == 'application_link'), None
-            )
-            existing_links = set()
-            if link_col_idx:
-                for row in ws.iter_rows(min_row=2, min_col=link_col_idx, max_col=link_col_idx):
-                    for cell in row:
-                        if cell.value:
-                            existing_links.add(cell.value)
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+
+            # Purge expired rows from the existing sheet
+            before_purge = len(existing_df)
+            existing_df = existing_df[existing_df["deadline"].apply(is_not_expired)]
+            purged = before_purge - len(existing_df)
+            if purged:
+                logger.info(f"Removed {purged} expired grant(s) from existing sheet.")
+
+            # Find only new rows
+            existing_links = set(existing_df["application_link"].dropna())
             new_rows = df[~df["application_link"].isin(existing_links)]
+
+            # Rewrite the sheet entirely (only way to remove rows with openpyxl)
+            del wb[SHEET_NAME]
+            ws = wb.create_sheet(SHEET_NAME)
+            ws.append(list(existing_df.columns))
+            for _, row in existing_df.iterrows():
+                ws.append(list(row))
+            for _, row in new_rows.iterrows():
+                ws.append(list(row))
+
+            _apply_styles(ws)
+            wb.save(EXCEL_FILE)
+
             if not new_rows.empty:
-                start_row = ws.max_row + 1
-                for i, (_, row) in enumerate(new_rows.iterrows()):
-                    for j, val in enumerate(row, 1):
-                        cell = ws.cell(row=start_row + i, column=j, value=val)
-                        cell.alignment = Alignment(wrap_text=True, vertical='top')
-                for col in ws.columns:
-                    max_len = max((len(str(cell.value)) if cell.value else 0) for cell in col)
-                    ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 80)
-                wb.save(EXCEL_FILE)
-                logger.info(f"Added {len(new_rows)} new grants → {EXCEL_FILE}")
+                logger.info(f"Added {len(new_rows)} new grant(s) → {EXCEL_FILE}")
             else:
                 logger.info("No new grants to add.")
         else:

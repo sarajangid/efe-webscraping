@@ -322,16 +322,27 @@ def run(max_pages=2, headless=True):
 
         if SHEET_NAME in existing_sheets:
             existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+
+            # Purge expired rows from the existing sheet
+            before_purge = len(existing_df)
+            existing_df = existing_df[existing_df["Application Deadline"].apply(is_not_expired)]
+            purged = before_purge - len(existing_df)
+            if purged:
+                print(f"Removed {purged} expired grant(s) from existing sheet.")
+
+            # Append only new (not-yet-recorded) grants
             existing_links = set(existing_df["Original Link"])
             new_rows = df[~df["Original Link"].isin(existing_links)]
+            combined_df = pd.concat([existing_df, new_rows], ignore_index=True)
+
+            # Rewrite the entire sheet so purged rows are actually gone
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+                combined_df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
 
             if not new_rows.empty:
-                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                    startrow = writer.book[SHEET_NAME].max_row
-                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
-                print(f"Added {len(new_rows)} new grants")
+                print(f"Added {len(new_rows)} new grant(s).")
             else:
-                print("No new grants")
+                print("No new grants.")
 
         else:
             # File exists but sheet doesn't — add new sheet without touching others

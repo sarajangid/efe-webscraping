@@ -459,20 +459,36 @@ GRANT_KEYS = [
 HEADER_COLOR = "1F4E79"
 
 def save_to_excel(grants, path=OUTPUT_FILE):
-    #wb = openpyxl.Workbook()
-    #ws = wb.active
-    #ws.title = "MENA Education Grants"
-    #ws.title = "impact funding"
+    sheet_name = "impact funding"
 
     if os.path.exists(path):
-        wb = openpyxl.load_workbook(path)   # <-- load existing file
+        wb = openpyxl.load_workbook(path)
+        # Load existing rows and purge expired ones
+        if sheet_name in wb.sheetnames:
+            import pandas as pd
+            existing_df = pd.read_excel(path, sheet_name=sheet_name)
+            before_purge = len(existing_df)
+            existing_df = existing_df[existing_df["Deadline"].apply(is_not_expired)]
+            purged = before_purge - len(existing_df)
+            if purged:
+                print(f"  Removed {purged} expired grant(s) from existing sheet.")
+            existing_links = set(existing_df["Grant Link"].dropna())
+        else:
+            existing_df = None
+            existing_links = set()
     else:
-        wb = openpyxl.Workbook()            # create new if it doesn't exist
+        wb = openpyxl.Workbook()
+        wb.active.title = sheet_name  # placeholder so it exists
+        existing_df = None
+        existing_links = set()
 
-    # Create or replace your sheet
-    sheet_name = "impact funding"
+    # Deduplicate incoming grants against existing
+    new_grants = [g for g in grants if g.get("grant_link", "") not in existing_links]
+    print(f"  {len(new_grants)} new grant(s) to add.")
+
+    # Rebuild sheet from scratch
     if sheet_name in wb.sheetnames:
-        del wb[sheet_name]                  # optional: overwrite sheet
+        del wb[sheet_name]
     ws = wb.create_sheet(title=sheet_name)
 
     header_fill = PatternFill(start_color=HEADER_COLOR, end_color=HEADER_COLOR, fill_type="solid")
@@ -488,15 +504,26 @@ def save_to_excel(grants, path=OUTPUT_FILE):
 
     ws.row_dimensions[1].height = 30
     wrap_top = Alignment(vertical="top", wrap_text=True)
+    row_idx = 2
 
-    for row_idx, grant in enumerate(grants, 2):
+    # Write back surviving existing rows
+    if existing_df is not None:
+        for _, row in existing_df.iterrows():
+            for col_idx, (header, _) in enumerate(COLUMNS, 1):
+                ws.cell(row=row_idx, column=col_idx, value=row.get(header, "")).alignment = wrap_top
+            ws.row_dimensions[row_idx].height = 80
+            row_idx += 1
+
+    # Append new grants
+    for grant in new_grants:
         for col_idx, key in enumerate(GRANT_KEYS, 1):
             ws.cell(row=row_idx, column=col_idx, value=grant.get(key, "")).alignment = wrap_top
         ws.row_dimensions[row_idx].height = 80
+        row_idx += 1
 
     ws.freeze_panes = "A2"
     wb.save(path)
-    print(f"\n  Saved {len(grants)} grants -> {path}")
+    print(f"  Saved {row_idx - 2} total grants -> {path}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

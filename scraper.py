@@ -502,8 +502,6 @@ if df.empty:
 df["Documents"] = df["Documents"].apply(json.dumps)
 df = df[df["Agency"].isin(ALLOWED_AGENCIES)]
 
-df = df[df["Due Date"].apply(is_not_expired)]
-print(f"After deadline filter: {len(df)} remaining.")
 
 if df.empty:
     print("All grants expired; skipping Excel update.")
@@ -514,16 +512,27 @@ if os.path.exists(EXCEL_FILE):
 
     if SHEET_NAME in existing_sheets:
         existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+
+        # Purge expired rows from the existing sheet
+        before_purge = len(existing_df)
+        existing_df = existing_df[existing_df["Due Date"].apply(is_not_expired)]
+        purged = before_purge - len(existing_df)
+        if purged:
+            print(f"Removed {purged} expired grant(s) from existing sheet.")
+
+        # Append only new (not-yet-recorded) grants
         existing_links = set(existing_df["Application Link"])
         new_rows = df[~df["Application Link"].isin(existing_links)]
+        combined_df = pd.concat([existing_df, new_rows], ignore_index=True)
+
+        # Rewrite the entire sheet so purged rows are actually gone
+        with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+            combined_df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
 
         if not new_rows.empty:
-            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                startrow = writer.book[SHEET_NAME].max_row
-                new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
-            print(f"Added {len(new_rows)} new grants")
+            print(f"Added {len(new_rows)} new grant(s).")
         else:
-            print("No new grants")
+            print("No new grants.")
 
     else:
         # File exists but sheet doesn't — add new sheet without touching others
