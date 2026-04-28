@@ -116,6 +116,17 @@ MENA_COUNTRIES = [
     "Arab World","GCC","Maghreb","Levant",
 ]
 
+# EU-specific terms that imply MENA targeting. The EU rarely uses the literal
+# string "MENA" in its call text — it uses "Southern Neighbourhood", "MEDA",
+# "Euro-Mediterranean", etc. These map to the MENA region in EU policy lingo.
+EU_MENA_TERMS = [
+    "Southern Neighbourhood","Southern Mediterranean","Euro-Mediterranean",
+    "EuroMed","Mediterranean Partner","Mediterranean partners","MEDA",
+    "Union for the Mediterranean","UfM","NEAR-TS","ENI South","NDICI MENA",
+]
+
+ALL_MENA_TERMS = MENA_COUNTRIES + EU_MENA_TERMS
+
 KEYWORDS = [
     "youth employment","workforce development","employability","job placement",
     "job creation","livelihoods","economic empowerment","economic inclusion",
@@ -123,7 +134,7 @@ KEYWORDS = [
     "labor market activation","economic participation","labor market entry",
     "NEET","work readiness","job seekers","early-career","reducing inequalities",
     "skills development","vocational training","technical training","soft skills",
-    "digital skills","green jobs","green skills","TVET","upskilling","resciling",
+    "digital skills","green jobs","green skills","TVET","upskilling","reskilling",
     "entrepreneurship","SME development","financial inclusion","gig economy",
 ]
 
@@ -134,10 +145,12 @@ COLUMNS = [
 ]
 
 def contains_mena(text):
+    """Match MENA countries plus EU-specific MENA terms with word boundaries.
+    Word boundaries prevent 'Levant' matching inside 'relevant' and 'MENA'
+    matching inside 'phenomena'."""
     if not text:
         return []
-    text_lower = text.lower()
-    return [c for c in MENA_COUNTRIES if c.lower() in text_lower]
+    return [t for t in ALL_MENA_TERMS if re.search(r'\b' + re.escape(t) + r'\b', text, re.IGNORECASE)]
 
 def find_keywords(text):
     if not text:
@@ -222,7 +235,14 @@ async def scrape():
                     # Open detail page in a new tab — listing page stays loaded
                     detail_page = await context.new_page()
                     try:
-                        await detail_page.goto(full_link, wait_until="domcontentloaded", timeout=15000)
+                        # EU portal is a heavy SPA; domcontentloaded returns before
+                        # the call body renders. Wait for `load`, then for a content
+                        # element, with a short networkidle settle.
+                        await detail_page.goto(full_link, wait_until="load", timeout=25000)
+                        try:
+                            await detail_page.wait_for_load_state("networkidle", timeout=8000)
+                        except PlaywrightTimeout:
+                            pass  # SPAs sometimes never reach networkidle; proceed
                     except PlaywrightTimeout:
                         print("⚠️ Detail page timeout, skipping")
                         await detail_page.close()
@@ -254,17 +274,26 @@ async def scrape():
 
                     await detail_page.close()
 
-                    mena_matches = contains_mena(search_text)
+                    # Combine listing card text + detail page content. The card text
+                    # often carries the program code (e.g. NEAR-TS, MEDA) that signals
+                    # MENA targeting even when the detail body is generic.
+                    combined_text = (text or "") + "\n" + (search_text or "")
+                    print(f"   📄 detail length: {len(search_text or '')}, card length: {len(text or '')}")
+
+                    mena_matches = contains_mena(combined_text)
                     if not mena_matches:
                         print("❌ REJECTED: No MENA match")
                         continue
                     print(f"✅ MENA: {mena_matches}")
 
-                    keyword_matches = find_keywords(search_text)
-                    if not keyword_matches:
-                        print("❌ REJECTED: No keyword match")
+                    # The portal mixes grants with procurement/tenders/prizes.
+                    # Require an explicit grant signal in the text.
+                    if not re.search(r'\b(grant|call for proposal)', combined_text, re.I):
+                        print("❌ REJECTED: Not a grant")
                         continue
-                    print(f"✅ Keywords: {keyword_matches}")
+                    print("✅ Grant type confirmed")
+
+                    keyword_matches = find_keywords(combined_text)
 
                     deadline = ""
                     deadline_match = re.search(r'Deadline[:\s]+([^\n]+)', text, re.I)
