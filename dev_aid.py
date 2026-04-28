@@ -157,8 +157,17 @@ def get_links(page):
             continue
     return out
 
-def scrape_detail(href, source_url):
+def scrape_detail(href, source_url, surface=""):
     """Fetch a detail page with requests+BS4; return row dict or None if filtered out."""
+    # Pre-fetch fast path: reject if listing card explicitly names non-MENA only
+    if surface:
+        s_mena = matches(surface, MENA_COUNTRIES)
+        s_non_mena = matches(surface, NON_MENA_REGIONS)
+        if s_non_mena and not s_mena:
+            return None
+        if s_non_mena and s_mena and len(s_non_mena) > len(s_mena):
+            return None
+
     time.sleep(1)
     try:
         resp = requests.get(href, headers=DETAIL_HEADERS, timeout=25)
@@ -181,9 +190,33 @@ def scrape_detail(href, source_url):
         return None
 
     geo = bs_get(soup, "[class*='location']", "[class*='Location']", "[class*='country']", "[class*='Country']", "[class*='region']")
-    mena_hits = matches(geo, MENA_COUNTRIES) or matches(content[:4000], MENA_COUNTRIES)
-    if not mena_hits:
+
+    # Strict whitelist filter — surface (listing card) + geo (detail page) are
+    # the trusted location signals. Reject any explicit non-MENA presence that
+    # is not outweighed by a MENA mention. Content is consulted only when
+    # surface AND geo carry no recognizable region signal at all.
+    location_signal = (surface or "") + " " + (geo or "")
+    loc_mena = matches(location_signal, MENA_COUNTRIES)
+    loc_non_mena = matches(location_signal, NON_MENA_REGIONS)
+
+    if loc_non_mena and not loc_mena:
         return None
+    if loc_non_mena and loc_mena and len(loc_non_mena) > len(loc_mena):
+        return None
+
+    if loc_mena:
+        mena_hits = loc_mena
+    else:
+        # No country-level signal in surface or geo (e.g. geo="Worldwide" or empty).
+        # Fall back to content with a stricter rule: any non-MENA mention without
+        # a strict MENA majority rejects.
+        c_mena = matches(content[:4000], MENA_COUNTRIES)
+        c_non_mena = matches(content[:4000], NON_MENA_REGIONS)
+        if c_non_mena and len(c_non_mena) >= len(c_mena):
+            return None
+        if not c_mena:
+            return None
+        mena_hits = c_mena
 
     kw_hits = matches(content, KEYWORDS)
     if not kw_hits:
@@ -261,10 +294,11 @@ def run(max_pages=2, headless=True):
 
             for e in entries:
                 href = e["href"]
+                surface = e.get("surface", "")
                 m = re.search(r"/tenders/(\d+)", href)
                 oid = m.group(1) if m else ""
                 if href not in seen_links and not (oid and oid in seen_ids):
-                    all_entries.append((href, source))
+                    all_entries.append((href, source, surface))
                     seen_links.add(href)
                     if oid:
                         seen_ids.add(oid)
@@ -277,8 +311,8 @@ def run(max_pages=2, headless=True):
     print(f"\nFetching {len(all_entries)} detail pages (10 concurrent)...")
 
     def fetch(args):
-        href, source = args
-        return scrape_detail(href, source)
+        href, source, surface = args
+        return scrape_detail(href, source, surface)
 
     rows = []
     with ThreadPoolExecutor(max_workers=3) as pool:
