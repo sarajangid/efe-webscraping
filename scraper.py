@@ -71,6 +71,51 @@ DEFAULT_WIDTHS = {
     "Deadline": 18,
 }
 
+ALLOWED_AGENCIES = {
+    "Bureau of Africa Regional Services",
+    "Assistance Coordination",
+    "Bureau of African Affairs",
+    "Bureau of Democracy Human Rights and Labor",
+    "Bureau of Economic and Business Affairs",
+    "Office of Global Women's Issues",
+    "Office of the Middle East Partnership Initiative",
+    "Bureau of Educational and Cultural Affairs",
+    "Bureau of Population Refugees and Migration",
+    "Bureau of Disaster and Humanitarian Response",
+    "Bureau of Near Eastern Affairs",
+    "Bureau of Global Public Affairs",
+    "Iraq Assistance Office",
+    "US Mission to Algeria",
+    "US Mission to Bahrain",
+    "US Mission to Egypt",
+    "US Mission to Iraq",
+    "US Mission to Israel",
+    "US Mission to Jerusalem",
+    "US Mission to Jordan",
+    "US Mission to Kuwait",
+    "US Mission to Lebanon",
+    "US Mission to Libya",
+    "US Mission to Mauritania",
+    "US Mission to Morocco",
+    "US Mission to Oman",
+    "US Mission to Qatar",
+    "US Mission to Saudi Arabia",
+    "US Mission to Tunisia",
+    "US Mission to United Arab Emirates",
+    "Bureau of International Labor Affairs",
+    "Millennium Challenge Corporation",
+}
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.datetime.today()
+        except ValueError:
+            continue
+    return True
+
 def _auto_width(header: str) -> float:
     header = (header or "").strip()
     if not header:
@@ -448,11 +493,6 @@ for detail_link in links:
     except Exception as e:
         print("Error scraping:", e)
 
-
-############################
-# DATAFRAME
-############################
-
 df = pd.DataFrame(rows)
 
 if df.empty:
@@ -460,27 +500,39 @@ if df.empty:
     raise SystemExit(0)
 
 df["Documents"] = df["Documents"].apply(json.dumps)
+df = df[df["Agency"].isin(ALLOWED_AGENCIES)]
 
 
-############################
-# UPDATE EXCEL (UNCHANGED)
-############################
+if df.empty:
+    print("All grants expired; skipping Excel update.")
+    raise SystemExit(0)
 
 if os.path.exists(EXCEL_FILE):
     existing_sheets = pd.ExcelFile(EXCEL_FILE).sheet_names
 
     if SHEET_NAME in existing_sheets:
         existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+
+        # Purge expired rows from the existing sheet
+        before_purge = len(existing_df)
+        existing_df = existing_df[existing_df["Due Date"].apply(is_not_expired)]
+        purged = before_purge - len(existing_df)
+        if purged:
+            print(f"Removed {purged} expired grant(s) from existing sheet.")
+
+        # Append only new (not-yet-recorded) grants
         existing_links = set(existing_df["Application Link"])
         new_rows = df[~df["Application Link"].isin(existing_links)]
+        combined_df = pd.concat([existing_df, new_rows], ignore_index=True)
+
+        # Rewrite the entire sheet so purged rows are actually gone
+        with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+            combined_df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
 
         if not new_rows.empty:
-            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                startrow = writer.book[SHEET_NAME].max_row
-                new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=startrow, index=False, header=False)
-            print(f"Added {len(new_rows)} new grants")
+            print(f"Added {len(new_rows)} new grant(s).")
         else:
-            print("No new grants")
+            print("No new grants.")
 
     else:
         # File exists but sheet doesn't — add new sheet without touching others
@@ -493,10 +545,6 @@ else:
     df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
     print("Created new Excel file")
 
-
-############################
-# SINGLE CALL TO PIPELINE
-############################
 
 apply_impact_formatting(EXCEL_FILE, SHEET_NAME)
 

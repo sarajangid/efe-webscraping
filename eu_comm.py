@@ -368,7 +368,13 @@ async def scrape():
         if os.path.exists(EXCEL_FILE):
             if SHEET_NAME in pd.ExcelFile(EXCEL_FILE).sheet_names:
                 existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
-                # Simple deduplication based on Title + Link (since ID is empty)
+
+                before_purge = len(existing_df)
+                existing_df = existing_df[existing_df["Application Deadline"].apply(is_not_expired)]
+                purged = before_purge - len(existing_df)
+                if purged:
+                    print(f"Removed {purged} expired grant(s) from existing sheet.")
+
                 combined = pd.concat([existing_df, df], ignore_index=True)
                 combined = combined.drop_duplicates(subset=["Original Link"], keep="last")
 

@@ -10,8 +10,19 @@ from dotenv import load_dotenv
 import os
 from openpyxl.styles import Alignment
 from summarizer import generate_darpe_summary
+from datetime import datetime
 
 load_dotenv()
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 # 1. Start a session
 session = requests.Session()
@@ -100,6 +111,9 @@ def extract_listing_rows(html):
 
         # 3) deadline (uses index)
         deadline = clean_text(tds[2].get_text(" ", strip=True)) if len(tds) > 2 else ""
+        
+        if not is_not_expired(deadline):
+            continue
 
         # 4) sector/services (uses index)
         focus_sector = clean_text(tds[3].get_text(" ", strip=True)) if len(tds) > 3 else ""
@@ -403,7 +417,7 @@ SHEET_NAME = "darpe"
 
 def _write_headers_and_data(ws, df):
     headers = ["Title", "Type", "Donor Name", "Geographic Area", "Focus Sector",
-               "Deadline", "Source Link", "Original Link", "Attachments", "AI Summary", "Amount (USD)", "Eligibility"]
+               "Deadline", "Source Link", "Original Link", "Attachments", "AI Summary"]
     ws.append(headers)
 
     for cell in ws[1]:
@@ -430,8 +444,7 @@ def _write_headers_and_data(ws, df):
             row["focus_sector"], row["deadline"], row["detail_page_url"],
             row["original link"],
             ", ".join(row["attachments"]) if row["attachments"] else "",
-            row["ai_summary"],
-            "", ""
+            row["ai_summary"]
         ])
 
 def _apply_style(ws):
@@ -444,31 +457,67 @@ def write_styled_sheet(df, excel_file, sheet_name):
     if os.path.exists(excel_file):
         wb = load_workbook(excel_file)
         if sheet_name in wb.sheetnames:
-            # Sheet exists — dedup and append only new rows
             existing_df = pd.read_excel(excel_file, sheet_name=sheet_name)
+
+            # Purge expired rows from the existing sheet
+            before_purge = len(existing_df)
+            existing_df = existing_df[existing_df["Deadline"].apply(is_not_expired)]
+            purged = before_purge - len(existing_df)
+            if purged:
+                print(f"Removed {purged} expired grant(s) from existing sheet.")
+
+            # Find only new rows
             existing_links = set(existing_df["Source Link"])
             new_rows = df[~df["detail_page_url"].isin(existing_links)]
-            if new_rows.empty:
-                print("No new grants")
-                return
-            ws = wb[sheet_name]
+
+            # Generate AI summaries for new rows
+            for i, row in new_rows.iterrows():
+                text_for_ai = " ".join([row["title"], row["focus_sector"], row["geographic_area"]])
+                new_rows.at[i, "ai_summary"] = generate_darpe_summary(text_for_ai)
+                time.sleep(12)
+
+            if not new_rows.empty:
+                print(f"Added {len(new_rows)} new grant(s).")
+            else:
+                print("No new grants.")
+
+            # Rewrite the sheet entirely (only way to remove rows with openpyxl)
+            del wb[sheet_name]
+            ws = wb.create_sheet(sheet_name)
+
+            headers = ["Title", "Type", "Donor Name", "Geographic Area", "Focus Sector",
+                       "Deadline", "Source Link", "Original Link", "Attachments", "AI Summary"]
+            ws.append(headers)
+            for cell in ws[1]:
+                cell.font = Font(bold=True, color="FFFFFF", name="Arial")
+                cell.fill = PatternFill("solid", start_color="2E4057")
+                cell.alignment = Alignment(horizontal="center")
+
+            # Write back surviving existing rows
+            for _, row in existing_df.iterrows():
+                ws.append([
+                    row.get("Title", ""), row.get("Type", ""), row.get("Donor Name", ""),
+                    row.get("Geographic Area", ""), row.get("Focus Sector", ""),
+                    row.get("Deadline", ""), row.get("Source Link", ""),
+                    row.get("Original Link", ""), row.get("Attachments", ""),
+                    row.get("AI Summary", "")
+                ])
+
+            # Append new rows
             for _, row in new_rows.iterrows():
                 ws.append([
                     row["title"], row["type"], row["donor_name"], row["geographic_area"],
                     row["focus_sector"], row["deadline"], row["detail_page_url"],
                     row["original link"],
                     ", ".join(row["attachments"]) if row["attachments"] else "",
-                    row["ai_summary"],
-                    "", ""
+                    row["ai_summary"]
                 ])
-            print(f"Added {len(new_rows)} new grants")
+
         else:
-            # File exists, sheet doesn't
             ws = wb.create_sheet(sheet_name)
             _write_headers_and_data(ws, df)
             print(f"Created new sheet '{sheet_name}'")
     else:
-        # File doesn't exist
         wb = Workbook()
         ws = wb.active
         ws.title = sheet_name

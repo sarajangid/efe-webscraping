@@ -9,6 +9,16 @@ from reqs import MENA_COUNTRIES, KEYWORDS, COLUMNS
 from dev_aid import norm, matches, parse_amount
 from concurrent.futures import ThreadPoolExecutor
 
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
+
 def ts() -> str:
     return datetime.now().strftime("[%H:%M:%S]")
 
@@ -271,21 +281,41 @@ def run(max_pages=2, headless=True):
     print(f"\n{'='*50}\n{ts()}   Done — {len(df)} matching rows\n{'='*50}\n")
     pd.set_option("display.max_columns", None); pd.set_option("display.max_colwidth", 60); pd.set_option("display.width", 220)
     print(df.to_string(index=False))
+    
+    df = df[df["Application Deadline"].apply(is_not_expired)]
+    print(f"{ts()} After deadline filter: {len(df)} rows remaining")
 
     SHEET_NAME = "sam"
     if os.path.exists(EXCEL_FILE):
         if SHEET_NAME in pd.ExcelFile(EXCEL_FILE).sheet_names:
-            new_rows = df[~df["Opportunity ID"].isin(set(pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)["Opportunity ID"].astype(str)))]
+            existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
+
+            # Purge expired rows from the existing sheet
+            before_purge = len(existing_df)
+            existing_df = existing_df[existing_df["Application Deadline"].apply(is_not_expired)]
+            purged = before_purge - len(existing_df)
+            if purged:
+                print(f"{ts()} Removed {purged} expired grant(s) from existing sheet.")
+
+            # Append only new rows
+            existing_ids = set(existing_df["Opportunity ID"].astype(str))
+            new_rows = df[~df["Opportunity ID"].astype(str).isin(existing_ids)]
+            combined_df = pd.concat([existing_df, new_rows], ignore_index=True)
+
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+                combined_df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+
             if not new_rows.empty:
-                with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a", if_sheet_exists="overlay") as writer:
-                    new_rows.to_excel(writer, sheet_name=SHEET_NAME, startrow=writer.book[SHEET_NAME].max_row, index=False, header=False)
-                print(f"{ts()} Added {len(new_rows)} new grants")
-            else: print(f"{ts()} No new grants")
+                print(f"{ts()} Added {len(new_rows)} new grant(s).")
+            else:
+                print(f"{ts()} No new grants.")
         else:
-            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer: df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
+            with pd.ExcelWriter(EXCEL_FILE, engine="openpyxl", mode="a") as writer:
+                df.to_excel(writer, sheet_name=SHEET_NAME, index=False)
             print(f"{ts()} Created new sheet '{SHEET_NAME}'")
     else:
-        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False); print(f"{ts()} Created new Excel file")
+        df.to_excel(EXCEL_FILE, sheet_name=SHEET_NAME, index=False)
+        print(f"{ts()} Created new Excel file")
     apply_impact_formatting(EXCEL_FILE, SHEET_NAME)
 
     elapsed = time.time() - start
