@@ -78,6 +78,27 @@ def is_not_expired(deadline_str):
             continue
     return True
 
+BAD_FUNDSFORNGOS_SUMMARY = "FUNDSFORNGOS LLC Email Forms"
+
+def clean_text(value):
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+def drop_bad_fundsforngos_rows(df):
+    if df.empty:
+        return df
+
+    bad_mask = pd.Series(False, index=df.index)
+
+    for col in ["summary", "ai_summary"]:
+        if col in df.columns:
+            bad_mask |= df[col].fillna("").map(clean_text).eq(BAD_FUNDSFORNGOS_SUMMARY)
+
+    removed = int(bad_mask.sum())
+    if removed:
+        logger.info(f"Removed {removed} grant(s) with bad FundsForNGOs summary.")
+
+    return df.loc[~bad_mask].copy()
+
 def get_soup(url, session, retries=3):
     """Fetch a URL and return a BeautifulSoup object, with retries."""
     for attempt in range(retries):
@@ -359,13 +380,16 @@ def main():
                 all_grants.append(info)
 
     if not all_grants:
-        logger.warning("No grants found.")
-        return
+        logger.warning("No grants found in current run. Cleaning existing sheet if present.")
+        df = pd.DataFrame()
+    else:
+        df = pd.DataFrame(all_grants)
 
-    df = pd.DataFrame(all_grants)
-    
-    #filter expired deadlines
-    df = df[df["deadline"].apply(is_not_expired)]
+        # filter expired deadlines
+        df = df[df["deadline"].apply(is_not_expired)]
+
+        # remove bad FundsForNGOs placeholder rows from current run
+        df = drop_bad_fundsforngos_rows(df)
 
     SHEET_NAME = "Funds for NGOs"
 
@@ -389,16 +413,25 @@ def main():
         if SHEET_NAME in wb.sheetnames:
             existing_df = pd.read_excel(EXCEL_FILE, sheet_name=SHEET_NAME)
 
-            # Purge expired rows from the existing sheet
+            # Purge expired rows + bad FundsForNGOs placeholder rows from the existing sheet
             before_purge = len(existing_df)
-            existing_df = existing_df[existing_df["deadline"].apply(is_not_expired)]
+
+            if "deadline" in existing_df.columns:
+                existing_df = existing_df[existing_df["deadline"].apply(is_not_expired)]
+
+            existing_df = drop_bad_fundsforngos_rows(existing_df)
+
             purged = before_purge - len(existing_df)
             if purged:
-                logger.info(f"Removed {purged} expired grant(s) from existing sheet.")
+                logger.info(f"Removed {purged} expired/bad grant(s) from existing sheet.")
 
             # Find only new rows
-            existing_links = set(existing_df["application_link"].dropna())
-            new_rows = df[~df["application_link"].isin(existing_links)]
+            if df.empty:
+                new_rows = pd.DataFrame(columns=existing_df.columns)
+            else:
+                existing_links = set(existing_df["application_link"].dropna())
+                new_rows = df[~df["application_link"].isin(existing_links)]
+                new_rows = new_rows.reindex(columns=existing_df.columns)
 
             # Rewrite the sheet entirely (only way to remove rows with openpyxl)
             del wb[SHEET_NAME]
