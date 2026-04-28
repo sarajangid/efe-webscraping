@@ -178,6 +178,16 @@ def scrape_detail(href, source_url, surface=""):
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
+    # Capture the title before stripping <header> — the tender h1 lives inside
+    # the article's <header>, so the cleanup below would otherwise delete it.
+    og = soup.find("meta", property="og:title")
+    title = (
+        bs_get(soup, "h1")
+        or (og.get("content").strip() if og and og.get("content") else "")
+        or (soup.title.string.split(" — ")[1].strip() if soup.title and " — " in soup.title.string else "")
+        or "N/A"
+    )
+
     # Strip nav/sidebar so geo matching isn't polluted by filter labels
     for el in soup.select("nav, header, footer, aside, [class*='sidebar'], [class*='filter'], [class*='nav']"):
         el.decompose()
@@ -225,7 +235,6 @@ def scrape_detail(href, source_url, surface=""):
     m = re.search(r"/tenders/(\d+)", href)
     opp_id = m.group(1) if m else re.sub(r"\W", "", href)[-12:]
 
-    title       = bs_get(soup, "h1", "[class*='title'] h1", "[class*='Title']") or "N/A"
     donor       = bs_get(soup, "[class*='donor']", "[class*='Donor']", "[class*='funder']", "[class*='client']", "[class*='organisation']")
     sector      = bs_get(soup, "[class*='sector']", "[class*='Sector']", "[class*='focus']", "[class*='theme']")
     eligibility = bs_get(soup, "[class*='eligib']", "[class*='Eligib']", "[class*='applicant']", "[class*='eligible']")
