@@ -10,8 +10,19 @@ from dotenv import load_dotenv
 import os
 from openpyxl.styles import Alignment
 from summarizer import generate_darpe_summary
+from datetime import datetime
 
 load_dotenv()
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 # 1. Start a session
 session = requests.Session()
@@ -100,6 +111,9 @@ def extract_listing_rows(html):
 
         # 3) deadline (uses index)
         deadline = clean_text(tds[2].get_text(" ", strip=True)) if len(tds) > 2 else ""
+        
+        if not is_not_expired(deadline):
+            continue
 
         # 4) sector/services (uses index)
         focus_sector = clean_text(tds[3].get_text(" ", strip=True)) if len(tds) > 3 else ""

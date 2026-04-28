@@ -9,6 +9,16 @@ from reqs import MENA_COUNTRIES, KEYWORDS, COLUMNS
 from dev_aid import norm, matches, parse_amount
 from concurrent.futures import ThreadPoolExecutor
 
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
+
 def ts() -> str:
     return datetime.now().strftime("[%H:%M:%S]")
 
@@ -271,6 +281,9 @@ def run(max_pages=2, headless=True):
     print(f"\n{'='*50}\n{ts()}   Done — {len(df)} matching rows\n{'='*50}\n")
     pd.set_option("display.max_columns", None); pd.set_option("display.max_colwidth", 60); pd.set_option("display.width", 220)
     print(df.to_string(index=False))
+    
+    df = df[df["Application Deadline"].apply(is_not_expired)]
+    print(f"{ts()} After deadline filter: {len(df)} rows remaining")
 
     SHEET_NAME = "sam"
     if os.path.exists(EXCEL_FILE):

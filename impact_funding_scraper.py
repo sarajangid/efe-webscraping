@@ -17,8 +17,19 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from summarizer import generate_summary
 import os
 from pathlib import Path
+from datetime import datetime
 
 from dotenv import load_dotenv
+
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.today()
+        except ValueError:
+            continue
+    return True
 
 load_dotenv()
 
@@ -523,6 +534,8 @@ def main():
         print(f"    [{i+1}/{len(all_grants)}] summarized")
 
     print(f"\n[4/4] Exporting {len(all_grants)} total grant(s) to Excel...")
+    all_grants = [g for g in all_grants if is_not_expired(g.get("deadline", ""))]
+    print(f"  After deadline filter: {len(all_grants)} grant(s)")
     save_to_excel(all_grants)
     print("\nDone!")
 

@@ -198,6 +198,9 @@ def scrape_detail(href, source_url):
     eligibility = bs_get(soup, "[class*='eligib']", "[class*='Eligib']", "[class*='applicant']", "[class*='eligible']")
     deadline    = bs_get(soup, "[class*='deadline']", "[class*='Deadline']", "[class*='closing']", "time[datetime]")
     date_posted = bs_get(soup, "[class*='posted']", "[class*='Published']", "[class*='published']", "time")
+    
+    if not is_not_expired(deadline):
+        return None
     amt_min, amt_max = parse_amount(bs_get(soup, "[class*='amount']", "[class*='Amount']", "[class*='budget']", "[class*='Budget']", "[class*='funding']"))
 
     return {

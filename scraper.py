@@ -22,6 +22,16 @@ from selenium.common.exceptions import TimeoutException
 from upload_to_sharepoint import download_documents
 from summarizer import generate_simpler_summary
 
+def is_not_expired(deadline_str):
+    if not deadline_str:
+        return True
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%b %d, %Y"):
+        try:
+            return datetime.datetime.strptime(str(deadline_str).strip(), fmt) >= datetime.datetime.today()
+        except ValueError:
+            continue
+    return True
+
 load_dotenv()
 EXCEL_FILE=os.environ["EXCEL_FILE"]
 BASE_DOWNLOAD_DIR = os.environ["BASE_DOWNLOAD_DIR"]
@@ -458,6 +468,14 @@ df = pd.DataFrame(rows)
 if df.empty:
     print("No grants found; skipping Excel update and document download.")
     raise SystemExit(0)
+
+df = df[df["Due Date"].apply(is_not_expired)]
+print(f"After deadline filter: {len(df)} remaining.")
+
+if df.empty:
+    print("All grants expired; skipping Excel update.")
+    raise SystemExit(0)
+
 
 df["Documents"] = df["Documents"].apply(json.dumps)
 
